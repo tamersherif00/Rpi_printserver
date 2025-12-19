@@ -178,12 +178,12 @@ EOF
 
 configure_cups() {
     log_info "Configuring CUPS..."
-    "$SCRIPT_DIR/configure-cups.sh"
+    bash "$SCRIPT_DIR/configure-cups.sh"
 }
 
 configure_avahi() {
     log_info "Configuring Avahi for AirPrint..."
-    "$SCRIPT_DIR/configure-avahi.sh"
+    bash "$SCRIPT_DIR/configure-avahi.sh"
 }
 
 install_systemd_service() {
