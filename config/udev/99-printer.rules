@@ -1,0 +1,43 @@
+# udev rules for USB printer hotplug detection
+# These rules trigger actions when USB printers are connected/disconnected
+
+# Rule for USB printer connection - trigger CUPS reload
+# This works for most USB printers identified by bInterfaceClass=7 (printer)
+SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", ACTION=="add", \
+    RUN+="/bin/systemctl restart cups.service", \
+    RUN+="/usr/bin/logger -t printer-hotplug 'USB printer connected, restarting CUPS'"
+
+# Rule for USB printer disconnection - log the event
+SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", ACTION=="remove", \
+    RUN+="/usr/bin/logger -t printer-hotplug 'USB printer disconnected'"
+
+# Brother specific rules (common Brother USB vendor ID: 04f9)
+SUBSYSTEM=="usb", ATTR{idVendor}=="04f9", ACTION=="add", \
+    RUN+="/bin/systemctl restart cups.service", \
+    RUN+="/usr/bin/logger -t printer-hotplug 'Brother printer connected'"
+
+# HP specific rules (HP USB vendor ID: 03f0)
+SUBSYSTEM=="usb", ATTR{idVendor}=="03f0", ACTION=="add", \
+    RUN+="/bin/systemctl restart cups.service", \
+    RUN+="/usr/bin/logger -t printer-hotplug 'HP printer connected'"
+
+# Canon specific rules (Canon USB vendor ID: 04a9)
+SUBSYSTEM=="usb", ATTR{idVendor}=="04a9", ACTION=="add", \
+    RUN+="/bin/systemctl restart cups.service", \
+    RUN+="/usr/bin/logger -t printer-hotplug 'Canon printer connected'"
+
+# Epson specific rules (Epson USB vendor ID: 04b8)
+SUBSYSTEM=="usb", ATTR{idVendor}=="04b8", ACTION=="add", \
+    RUN+="/bin/systemctl restart cups.service", \
+    RUN+="/usr/bin/logger -t printer-hotplug 'Epson printer connected'"
+
+# Generic USB printer - fallback rule using usblp module
+KERNEL=="lp[0-9]*", SUBSYSTEM=="usb", ACTION=="add", \
+    RUN+="/bin/systemctl restart cups.service"
+
+# Set proper permissions for printer devices
+SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", MODE="0666"
+
+# Trigger Avahi to regenerate AirPrint services when printer is added
+SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", ACTION=="add", \
+    RUN+="/opt/printserver/scripts/configure-avahi.sh"

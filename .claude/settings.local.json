@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(powershell -File:*)",
+      "Bash(python -m pip install:*)",
+      "Bash(set FLASK_APP=src.web.app)",
+      "Bash(set:*)",
+      "Bash(set PYTHONPATH=src:*)",
+      "Bash(python -m flask run:*)",
+      "Bash(python:*)"
+    ]
+  }
+}

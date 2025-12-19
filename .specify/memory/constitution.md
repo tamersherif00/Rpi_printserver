@@ -1,50 +1,74 @@
-# [PROJECT_NAME] Constitution
-<!-- Example: Spec Constitution, TaskFlow Constitution, etc. -->
+<!--
+Sync Impact Report
+==================
+Version change: N/A → 1.0.0 (Initial creation)
+Added sections:
+  - Core Principles (5 principles)
+  - Quality Gates
+  - Development Workflow
+  - Governance
+Templates requiring updates:
+  - .specify/templates/plan-template.md (✅ reviewed - no changes needed)
+  - .specify/templates/spec-template.md (✅ reviewed - no changes needed)
+  - .specify/templates/tasks-template.md (✅ reviewed - no changes needed)
+Follow-up TODOs: None
+-->
+
+# Rpi_printserver Constitution
 
 ## Core Principles
 
-### [PRINCIPLE_1_NAME]
-<!-- Example: I. Library-First -->
-[PRINCIPLE_1_DESCRIPTION]
-<!-- Example: Every feature starts as a standalone library; Libraries must be self-contained, independently testable, documented; Clear purpose required - no organizational-only libraries -->
+### I. Code Quality First
 
-### [PRINCIPLE_2_NAME]
-<!-- Example: II. CLI Interface -->
-[PRINCIPLE_2_DESCRIPTION]
-<!-- Example: Every library exposes functionality via CLI; Text in/out protocol: stdin/args → stdout, errors → stderr; Support JSON + human-readable formats -->
+All code MUST be clean, readable, and self-documenting. Functions MUST do one thing well and be named to describe that purpose. Complex logic MUST be broken into smaller, testable units. Magic numbers and strings MUST be extracted to named constants. Code duplication MUST be eliminated through proper abstraction only when the pattern appears three or more times.
 
-### [PRINCIPLE_3_NAME]
-<!-- Example: III. Test-First (NON-NEGOTIABLE) -->
-[PRINCIPLE_3_DESCRIPTION]
-<!-- Example: TDD mandatory: Tests written → User approved → Tests fail → Then implement; Red-Green-Refactor cycle strictly enforced -->
+### II. Test-Driven Development
 
-### [PRINCIPLE_4_NAME]
-<!-- Example: IV. Integration Testing -->
-[PRINCIPLE_4_DESCRIPTION]
-<!-- Example: Focus areas requiring integration tests: New library contract tests, Contract changes, Inter-service communication, Shared schemas -->
+Tests MUST be written before implementation code. The Red-Green-Refactor cycle is mandatory:
+- Write a failing test that defines expected behavior
+- Write minimal code to make the test pass
+- Refactor while keeping tests green
 
-### [PRINCIPLE_5_NAME]
-<!-- Example: V. Observability, VI. Versioning & Breaking Changes, VII. Simplicity -->
-[PRINCIPLE_5_DESCRIPTION]
-<!-- Example: Text I/O ensures debuggability; Structured logging required; Or: MAJOR.MINOR.BUILD format; Or: Start simple, YAGNI principles -->
+Unit tests MUST cover all business logic. Integration tests MUST verify hardware interactions and network communication. Test coverage MUST NOT drop below 80% for new code.
 
-## [SECTION_2_NAME]
-<!-- Example: Additional Constraints, Security Requirements, Performance Standards, etc. -->
+### III. Maintainability
 
-[SECTION_2_CONTENT]
-<!-- Example: Technology stack requirements, compliance standards, deployment policies, etc. -->
+Code MUST be structured for future developers to understand and modify. Dependencies MUST be explicit and minimal. Configuration MUST be externalized from code. Error messages MUST be actionable and include context. Logging MUST provide sufficient information for debugging without exposing sensitive data.
 
-## [SECTION_3_NAME]
-<!-- Example: Development Workflow, Review Process, Quality Gates, etc. -->
+### IV. Modular Architecture
 
-[SECTION_3_CONTENT]
-<!-- Example: Code review requirements, testing gates, deployment approval process, etc. -->
+Components MUST have clear boundaries and single responsibilities. Hardware abstraction layers MUST separate business logic from device-specific code. The print server core MUST be testable without physical printer hardware. External dependencies MUST be injected, not hardcoded.
+
+### V. Simplicity
+
+Start with the simplest solution that works. YAGNI (You Aren't Gonna Need It) applies to all features. Premature optimization is prohibited. Complexity MUST be justified by measurable requirements. When in doubt, leave it out.
+
+## Quality Gates
+
+All changes MUST pass these gates before merging:
+- All unit tests pass
+- All integration tests pass (mocked hardware acceptable in CI)
+- No new linting errors or warnings
+- Code review approval from at least one maintainer
+- Documentation updated for user-facing changes
+
+## Development Workflow
+
+1. **Branch**: Create feature branch from main
+2. **Specify**: Define requirements and acceptance criteria
+3. **Test**: Write failing tests for new functionality
+4. **Implement**: Write code to pass tests
+5. **Refactor**: Clean up while tests remain green
+6. **Review**: Submit for code review
+7. **Merge**: Squash merge to main after approval
 
 ## Governance
-<!-- Example: Constitution supersedes all other practices; Amendments require documentation, approval, migration plan -->
 
-[GOVERNANCE_RULES]
-<!-- Example: All PRs/reviews must verify compliance; Complexity must be justified; Use [GUIDANCE_FILE] for runtime development guidance -->
+This constitution supersedes conflicting practices. Amendments require:
+- Documented rationale for the change
+- Review by project maintainers
+- Version increment following semantic versioning
 
-**Version**: [CONSTITUTION_VERSION] | **Ratified**: [RATIFICATION_DATE] | **Last Amended**: [LAST_AMENDED_DATE]
-<!-- Example: Version: 2.1.1 | Ratified: 2025-06-13 | Last Amended: 2025-07-16 -->
+All pull requests MUST verify compliance with these principles. Deviations require explicit justification in the PR description.
+
+**Version**: 1.0.0 | **Ratified**: 2025-12-18 | **Last Amended**: 2025-12-18

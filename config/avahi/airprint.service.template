@@ -1,0 +1,69 @@
+<?xml version="1.0" standalone='no'?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<!--
+  AirPrint Service Template for WiFi Print Server
+
+  Placeholders:
+    {{PRINTER_NAME}} - CUPS printer name
+    {{PRINTER_INFO}} - Printer make/model description
+    {{PRINTER_LOCATION}} - Physical location of printer
+    {{HOSTNAME}} - Server hostname
+-->
+<service-group>
+  <name replace-wildcards="yes">{{PRINTER_INFO}} @ %h</name>
+
+  <!-- AirPrint service (iOS devices) -->
+  <service>
+    <type>_ipp._tcp</type>
+    <subtype>_universal._sub._ipp._tcp</subtype>
+    <port>631</port>
+    <txt-record>txtvers=1</txt-record>
+    <txt-record>qtotal=1</txt-record>
+    <txt-record>rp=printers/{{PRINTER_NAME}}</txt-record>
+    <txt-record>ty={{PRINTER_INFO}}</txt-record>
+    <txt-record>adminurl=http://{{HOSTNAME}}.local:631/printers/{{PRINTER_NAME}}</txt-record>
+    <txt-record>note={{PRINTER_LOCATION}}</txt-record>
+    <txt-record>priority=0</txt-record>
+    <txt-record>product=(GPL Ghostscript)</txt-record>
+    <!-- Supported document formats -->
+    <txt-record>pdl=application/octet-stream,application/pdf,application/postscript,image/gif,image/jpeg,image/png,image/tiff,image/urf,application/vnd.cups-banner,application/vnd.cups-pdf,application/vnd.cups-postscript,application/vnd.cups-raw</txt-record>
+    <!-- URF (Universal Raster Format) capabilities for AirPrint -->
+    <txt-record>URF=W8,SRGB24,CP1,RS300</txt-record>
+    <!-- Printer capabilities -->
+    <txt-record>Color=T</txt-record>
+    <txt-record>Duplex=F</txt-record>
+    <txt-record>Copies=T</txt-record>
+    <txt-record>Collate=T</txt-record>
+    <txt-record>Punch=F</txt-record>
+    <txt-record>Bind=F</txt-record>
+    <txt-record>Sort=F</txt-record>
+    <txt-record>Scan=F</txt-record>
+    <txt-record>Fax=F</txt-record>
+    <txt-record>TLS=1.2</txt-record>
+  </service>
+
+  <!-- IPP Everywhere service (Android, Chrome OS) -->
+  <service>
+    <type>_ipps._tcp</type>
+    <subtype>_universal._sub._ipps._tcp</subtype>
+    <port>631</port>
+    <txt-record>txtvers=1</txt-record>
+    <txt-record>qtotal=1</txt-record>
+    <txt-record>rp=printers/{{PRINTER_NAME}}</txt-record>
+    <txt-record>ty={{PRINTER_INFO}}</txt-record>
+    <txt-record>adminurl=https://{{HOSTNAME}}.local:631/printers/{{PRINTER_NAME}}</txt-record>
+    <txt-record>note={{PRINTER_LOCATION}}</txt-record>
+    <txt-record>pdl=application/octet-stream,application/pdf,application/postscript,image/gif,image/jpeg,image/png,image/tiff,image/urf,application/vnd.cups-banner,application/vnd.cups-pdf,application/vnd.cups-postscript,application/vnd.cups-raw</txt-record>
+    <txt-record>URF=W8,SRGB24,CP1,RS300</txt-record>
+    <txt-record>TLS=1.2</txt-record>
+  </service>
+
+  <!-- Printer discovery via DNS-SD -->
+  <service>
+    <type>_printer._tcp</type>
+    <port>515</port>
+    <txt-record>txtvers=1</txt-record>
+    <txt-record>qtotal=1</txt-record>
+    <txt-record>ty={{PRINTER_INFO}}</txt-record>
+  </service>
+</service-group>

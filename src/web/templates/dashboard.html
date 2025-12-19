@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Print Server{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <h1 class="mb-4"><i class="bi bi-speedometer2"></i> Dashboard</h1>
+    </div>
+</div>
+
+<!-- Server Status Cards -->
+<div class="row mb-4">
+    <div class="col-md-4 col-sm-6 mb-3">
+        <div class="card h-100">
+            <div class="card-body">
+                <h5 class="card-title"><i class="bi bi-hdd-network"></i> Server</h5>
+                <p class="card-text">
+                    <strong>Hostname:</strong> {{ server_status.hostname }}<br>
+                    <strong>IP Address:</strong> {{ server_status.ip_address }}<br>
+                    <strong>Uptime:</strong> <span id="uptime">{{ server_status.uptime // 3600 }}h {{ (server_status.uptime % 3600) // 60 }}m</span>
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4 col-sm-6 mb-3">
+        <div class="card h-100">
+            <div class="card-body">
+                <h5 class="card-title"><i class="bi bi-wifi"></i> Network</h5>
+                <p class="card-text">
+                    <strong>WiFi:</strong>
+                    {% if server_status.wifi_connected %}
+                        <span class="badge bg-success">Connected</span>
+                    {% else %}
+                        <span class="badge bg-danger">Disconnected</span>
+                    {% endif %}<br>
+                    {% if server_status.wifi_ssid %}
+                    <strong>SSID:</strong> {{ server_status.wifi_ssid }}<br>
+                    {% endif %}
+                    {% if server_status.wifi_signal > 0 %}
+                    <strong>Signal:</strong> {{ server_status.wifi_signal }}%
+                    {% endif %}
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4 col-sm-6 mb-3">
+        <div class="card h-100">
+            <div class="card-body">
+                <h5 class="card-title"><i class="bi bi-gear"></i> Services</h5>
+                <p class="card-text">
+                    <strong>CUPS:</strong>
+                    {% if server_status.cups_running %}
+                        <span class="badge bg-success">Running</span>
+                    {% else %}
+                        <span class="badge bg-danger">Stopped</span>
+                    {% endif %}<br>
+                    <strong>Avahi:</strong>
+                    {% if server_status.avahi_running %}
+                        <span class="badge bg-success">Running</span>
+                    {% else %}
+                        <span class="badge bg-danger">Stopped</span>
+                    {% endif %}
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Printers Section -->
+<div class="row">
+    <div class="col-12">
+        <h2 class="mb-3"><i class="bi bi-printer"></i> Printers</h2>
+    </div>
+</div>
+
+{% if printers %}
+<div class="row" id="printers-list">
+    {% for printer in printers %}
+    <div class="col-md-6 col-lg-4 mb-3">
+        <div class="card h-100 printer-card">
+            <div class="card-body">
+                <h5 class="card-title">
+                    {% if printer.status == 'idle' %}
+                        <i class="bi bi-check-circle-fill text-success"></i>
+                    {% elif printer.status == 'printing' %}
+                        <i class="bi bi-hourglass-split text-primary"></i>
+                    {% else %}
+                        <i class="bi bi-exclamation-circle-fill text-danger"></i>
+                    {% endif %}
+                    {{ printer.name }}
+                </h5>
+                <p class="card-text">
+                    <strong>Status:</strong>
+                    <span class="badge
+                        {% if printer.status == 'idle' %}bg-success
+                        {% elif printer.status == 'printing' %}bg-primary
+                        {% else %}bg-danger{% endif %}">
+                        {{ printer.status | capitalize }}
+                    </span><br>
+                    {% if printer.status_message %}
+                    <strong>Message:</strong> {{ printer.status_message }}<br>
+                    {% endif %}
+                    <strong>Make/Model:</strong> {{ printer.make_model }}<br>
+                    <strong>Accepting Jobs:</strong>
+                    {% if printer.is_accepting_jobs %}
+                        <span class="text-success">Yes</span>
+                    {% else %}
+                        <span class="text-danger">No</span>
+                    {% endif %}
+                </p>
+            </div>
+            <div class="card-footer">
+                <small class="text-muted">
+                    {% if printer.location %}Location: {{ printer.location }}{% endif %}
+                </small>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="alert alert-warning">
+    <i class="bi bi-exclamation-triangle"></i> No printers found. Make sure your printer is connected via USB.
+</div>
+{% endif %}
+
+<!-- Quick Actions -->
+<div class="row mt-4">
+    <div class="col-12">
+        <h2 class="mb-3"><i class="bi bi-lightning"></i> Quick Actions</h2>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-6 col-lg-3 mb-3">
+        <a href="/queue" class="btn btn-outline-primary w-100">
+            <i class="bi bi-list-task"></i> View Print Queue
+        </a>
+    </div>
+    <div class="col-md-6 col-lg-3 mb-3">
+        <button class="btn btn-outline-secondary w-100" onclick="refreshStatus()">
+            <i class="bi bi-arrow-clockwise"></i> Refresh Status
+        </button>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Auto-refresh status every 30 seconds
+    setInterval(refreshStatus, 30000);
+</script>
+{% endblock %}

@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+
+{% block title %}Print Queue - Print Server{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <h1 class="mb-4">
+            <i class="bi bi-list-task"></i> Print Queue
+            <button class="btn btn-sm btn-outline-secondary ms-2" onclick="refreshJobs()">
+                <i class="bi bi-arrow-clockwise"></i> Refresh
+            </button>
+        </h1>
+    </div>
+</div>
+
+<!-- Filter Controls -->
+<div class="row mb-3">
+    <div class="col-auto">
+        <select class="form-select" id="statusFilter" onchange="filterJobs()">
+            <option value="all">All Jobs</option>
+            <option value="pending">Pending</option>
+            <option value="completed">Completed</option>
+        </select>
+    </div>
+</div>
+
+<!-- Jobs Table -->
+<div class="row">
+    <div class="col-12">
+        <div class="table-responsive">
+            <table class="table table-hover" id="jobsTable">
+                <thead class="table-light">
+                    <tr>
+                        <th>ID</th>
+                        <th>Document</th>
+                        <th>User</th>
+                        <th>Status</th>
+                        <th>Pages</th>
+                        <th>Submitted</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% if jobs %}
+                        {% for job in jobs %}
+                        <tr data-job-id="{{ job.id }}" class="job-row">
+                            <td>{{ job.id }}</td>
+                            <td>{{ job.title }}</td>
+                            <td>{{ job.user }}</td>
+                            <td>
+                                <span class="badge
+                                    {% if job.state == 'pending' or job.state == 'pending-held' %}bg-warning text-dark
+                                    {% elif job.state == 'processing' %}bg-primary
+                                    {% elif job.state == 'completed' %}bg-success
+                                    {% elif job.state == 'canceled' %}bg-secondary
+                                    {% else %}bg-danger{% endif %}">
+                                    {{ job.state | replace('-', ' ') | title }}
+                                </span>
+                            </td>
+                            <td>
+                                {% if job.pages %}
+                                    {{ job.pages_completed }}/{{ job.pages }}
+                                {% else %}
+                                    -
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if job.created_at %}
+                                    {{ job.created_at.strftime('%Y-%m-%d %H:%M') }}
+                                {% else %}
+                                    -
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if job.can_cancel %}
+                                <button class="btn btn-sm btn-danger" onclick="cancelJob({{ job.id }})">
+                                    <i class="bi bi-x-circle"></i> Cancel
+                                </button>
+                                {% else %}
+                                <span class="text-muted">-</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    {% else %}
+                        <tr>
+                            <td colspan="7" class="text-center text-muted py-4">
+                                <i class="bi bi-inbox fs-1"></i>
+                                <p class="mt-2">No print jobs in queue</p>
+                            </td>
+                        </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Job Statistics -->
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title"><i class="bi bi-bar-chart"></i> Queue Statistics</h5>
+                <div class="row text-center">
+                    <div class="col-3">
+                        <div class="stat-number text-primary" id="stat-total">{{ jobs | length }}</div>
+                        <div class="stat-label">Total</div>
+                    </div>
+                    <div class="col-3">
+                        <div class="stat-number text-warning" id="stat-pending">
+                            {{ jobs | selectattr('is_pending') | list | length }}
+                        </div>
+                        <div class="stat-label">Pending</div>
+                    </div>
+                    <div class="col-3">
+                        <div class="stat-number text-info" id="stat-processing">
+                            {{ jobs | selectattr('is_active') | list | length }}
+                        </div>
+                        <div class="stat-label">Printing</div>
+                    </div>
+                    <div class="col-3">
+                        <div class="stat-number text-success" id="stat-completed">
+                            {{ jobs | selectattr('is_complete') | list | length }}
+                        </div>
+                        <div class="stat-label">Completed</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Auto-refresh jobs every 10 seconds
+    setInterval(refreshJobs, 10000);
+</script>
+{% endblock %}

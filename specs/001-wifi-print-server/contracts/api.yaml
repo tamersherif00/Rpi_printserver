@@ -1,0 +1,316 @@
+openapi: 3.0.3
+info:
+  title: Print Server Web API
+  description: REST API for the Raspberry Pi WiFi Print Server web interface
+  version: 1.0.0
+
+servers:
+  - url: http://{host}:5000
+    description: Print server web interface
+    variables:
+      host:
+        default: localhost
+        description: Raspberry Pi hostname or IP
+
+paths:
+  /:
+    get:
+      summary: Dashboard page
+      description: Returns the main dashboard HTML page
+      responses:
+        '200':
+          description: Dashboard HTML
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /queue:
+    get:
+      summary: Print queue page
+      description: Returns the print queue HTML page
+      responses:
+        '200':
+          description: Queue HTML
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /api/status:
+    get:
+      summary: Get server status
+      description: Returns overall server and printer status
+      responses:
+        '200':
+          description: Server status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServerStatus'
+              example:
+                hostname: "printserver"
+                ip_address: "192.168.1.100"
+                uptime: 86400
+                cups_running: true
+                avahi_running: true
+                wifi_connected: true
+                wifi_ssid: "HomeNetwork"
+                wifi_signal: 75
+                printers:
+                  - name: "Brother_HL-L2350DW"
+                    status: "idle"
+                    status_message: "Ready"
+                    is_accepting_jobs: true
+
+  /api/printers:
+    get:
+      summary: List all printers
+      description: Returns list of configured printers
+      responses:
+        '200':
+          description: List of printers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Printer'
+
+  /api/printers/{name}:
+    get:
+      summary: Get printer details
+      description: Returns detailed information about a specific printer
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Printer name
+      responses:
+        '200':
+          description: Printer details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Printer'
+        '404':
+          description: Printer not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/jobs:
+    get:
+      summary: List print jobs
+      description: Returns list of print jobs (active and recent)
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, processing, completed, all]
+            default: all
+          description: Filter by job status
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 100
+          description: Maximum number of jobs to return
+      responses:
+        '200':
+          description: List of print jobs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PrintJob'
+
+  /api/jobs/{id}:
+    get:
+      summary: Get job details
+      description: Returns detailed information about a specific print job
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: Job ID
+      responses:
+        '200':
+          description: Job details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrintJob'
+        '404':
+          description: Job not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      summary: Cancel print job
+      description: Cancels a pending or processing print job
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: Job ID
+      responses:
+        '200':
+          description: Job canceled successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Job 123 canceled"
+        '404':
+          description: Job not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '400':
+          description: Job cannot be canceled (already completed)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  schemas:
+    ServerStatus:
+      type: object
+      properties:
+        hostname:
+          type: string
+          description: Server hostname
+        ip_address:
+          type: string
+          description: Current IP address
+        uptime:
+          type: integer
+          description: Uptime in seconds
+        cups_running:
+          type: boolean
+          description: CUPS service status
+        avahi_running:
+          type: boolean
+          description: Avahi service status
+        wifi_connected:
+          type: boolean
+          description: WiFi connection status
+        wifi_ssid:
+          type: string
+          description: Connected WiFi network
+        wifi_signal:
+          type: integer
+          description: WiFi signal strength percentage
+        printers:
+          type: array
+          items:
+            $ref: '#/components/schemas/PrinterSummary'
+
+    PrinterSummary:
+      type: object
+      properties:
+        name:
+          type: string
+        status:
+          type: string
+          enum: [idle, printing, stopped, offline]
+        status_message:
+          type: string
+        is_accepting_jobs:
+          type: boolean
+
+    Printer:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Printer name in CUPS
+        uri:
+          type: string
+          description: Device URI
+        status:
+          type: string
+          enum: [idle, printing, stopped, offline]
+        status_message:
+          type: string
+          description: Human-readable status
+        is_accepting_jobs:
+          type: boolean
+        is_shared:
+          type: boolean
+        make_model:
+          type: string
+          description: Printer make and model
+        location:
+          type: string
+        info:
+          type: string
+
+    PrintJob:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: Unique job ID
+        title:
+          type: string
+          description: Document name
+        user:
+          type: string
+          description: Submitting user
+        state:
+          type: string
+          enum: [pending, pending-held, processing, processing-stopped, canceled, aborted, completed]
+        state_message:
+          type: string
+        size:
+          type: integer
+          description: Job size in bytes
+        pages:
+          type: integer
+          nullable: true
+          description: Number of pages
+        pages_completed:
+          type: integer
+          description: Pages printed
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+        printer_name:
+          type: string
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Error code
+      required:
+        - error
