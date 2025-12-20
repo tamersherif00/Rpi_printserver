@@ -7,7 +7,12 @@
       "Bash(set:*)",
       "Bash(set PYTHONPATH=src:*)",
       "Bash(python -m flask run:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(git add:*)",
+      "Bash(file:*)",
+      "Bash(git restore:*)",
+      "Bash(git commit:*)",
+      "Bash(git push)"
     ]
   }
 }
