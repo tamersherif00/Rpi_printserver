@@ -11,6 +11,13 @@ from flask import Flask, jsonify, render_template, request
 from printserver.cups_client import CupsClient, CupsClientError
 from printserver.printer import get_all_printers, get_printer
 from printserver.job import get_all_jobs, get_job, cancel_job as cancel_print_job
+from printserver.system_utils import (
+    get_hostname,
+    set_hostname,
+    validate_hostname,
+    requires_root,
+    SystemUtilsError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +170,12 @@ def register_routes(app: Flask) -> None:
             jobs = []
 
         return render_template("queue.html", jobs=jobs)
+
+    @app.route("/settings")
+    def settings():
+        """Render the settings page."""
+        server_info = get_server_status()
+        return render_template("settings.html", server_info=server_info)
 
     @app.route("/api/status")
     def api_status():
@@ -321,5 +334,91 @@ def register_routes(app: Flask) -> None:
                 "timestamp": datetime.now().isoformat(),
                 "error": "Cannot connect to CUPS",
             }), 503
+
+    @app.route("/api/system/hostname", methods=["GET"])
+    def api_get_hostname():
+        """Get current system hostname."""
+        try:
+            hostname = get_hostname()
+            return jsonify({
+                "hostname": hostname,
+                "can_change": requires_root(),
+            })
+        except SystemUtilsError as e:
+            return jsonify({"error": str(e), "code": "SYSTEM_ERROR"}), 500
+
+    @app.route("/api/system/hostname", methods=["POST"])
+    def api_set_hostname():
+        """Set system hostname.
+
+        Request body:
+            {
+                "hostname": "new-hostname"
+            }
+        """
+        if not requires_root():
+            return jsonify({
+                "error": "Permission denied. Service must run as root to change hostname.",
+                "code": "PERMISSION_DENIED",
+            }), 403
+
+        data = request.get_json()
+        if not data or "hostname" not in data:
+            return jsonify({
+                "error": "Missing 'hostname' in request body",
+                "code": "INVALID_REQUEST",
+            }), 400
+
+        new_hostname = data["hostname"].strip()
+
+        # Validate hostname
+        is_valid, error_msg = validate_hostname(new_hostname)
+        if not is_valid:
+            return jsonify({
+                "error": error_msg,
+                "code": "INVALID_HOSTNAME",
+            }), 400
+
+        # Set hostname
+        try:
+            old_hostname = get_hostname()
+            set_hostname(new_hostname)
+            logger.info(f"Hostname changed from '{old_hostname}' to '{new_hostname}'")
+            return jsonify({
+                "success": True,
+                "message": f"Hostname changed to '{new_hostname}'",
+                "old_hostname": old_hostname,
+                "new_hostname": new_hostname,
+            })
+        except SystemUtilsError as e:
+            logger.error(f"Failed to set hostname: {e}")
+            return jsonify({
+                "error": str(e),
+                "code": "SYSTEM_ERROR",
+            }), 500
+
+    @app.route("/api/system/hostname/validate", methods=["POST"])
+    def api_validate_hostname():
+        """Validate a hostname without setting it.
+
+        Request body:
+            {
+                "hostname": "hostname-to-validate"
+            }
+        """
+        data = request.get_json()
+        if not data or "hostname" not in data:
+            return jsonify({
+                "error": "Missing 'hostname' in request body",
+                "code": "INVALID_REQUEST",
+            }), 400
+
+        hostname = data["hostname"].strip()
+        is_valid, error_msg = validate_hostname(hostname)
+
+        return jsonify({
+            "valid": is_valid,
+            "error": error_msg,
+        })
 
     logger.info("Routes registered")
