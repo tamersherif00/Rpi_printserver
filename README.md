@@ -94,10 +94,16 @@ sudo ./scripts/install.sh
 
 Access the management interface at `http://printserver.local:5000`
 
-- View printer status
-- Monitor print queue
-- Cancel pending jobs
-- Check server health
+**Features:**
+- View printer status and server health
+- Monitor print queue and cancel jobs
+- Change print server hostname
+- Real-time status updates
+
+**Pages:**
+- **Dashboard** (`/`): Overview of printers and server status
+- **Print Queue** (`/queue`): Active and completed print jobs
+- **Settings** (`/settings`): Change hostname and system settings
 
 ## Project Structure
 
@@ -131,6 +137,9 @@ rpi-printserver/
 | `/api/jobs` | GET | List print jobs |
 | `/api/jobs/{id}` | GET | Job details |
 | `/api/jobs/{id}` | DELETE | Cancel a job |
+| `/api/system/hostname` | GET | Get current hostname |
+| `/api/system/hostname` | POST | Change hostname |
+| `/api/system/hostname/validate` | POST | Validate hostname |
 | `/health` | GET | Health check |
 
 ## Configuration
