@@ -7,12 +7,13 @@ Requires=network.target
 
 [Service]
 Type=simple
-User=pi
-Group=pi
+User=root
+Group=root
 WorkingDirectory=/opt/printserver
 Environment=FLASK_ENV=production
+Environment=PYTHONPATH=/opt/printserver
 Environment=PRINTSERVER_CONFIG=/etc/printserver/config.ini
-ExecStart=/opt/printserver/venv/bin/python -m flask run --host=0.0.0.0 --port=5000
+ExecStart=/usr/bin/python3 -c "from web.app import create_app; app = create_app(); app.run(host='0.0.0.0', port=5000)"
 ExecReload=/bin/kill -HUP $MAINPID
 
 # Restart configuration
