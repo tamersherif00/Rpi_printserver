@@ -71,9 +71,10 @@ def validate_hostname(hostname: str) -> tuple[bool, Optional[str]]:
 
 
 def set_hostname(new_hostname: str) -> None:
-    """Set system hostname.
+    """Set system hostname using a privileged helper script.
 
-    This updates both the transient hostname and the persistent hostname files.
+    This calls the set-hostname.sh script which runs with sudo privileges
+    to update the hostname, /etc/hostname, /etc/hosts, and restart Avahi.
 
     Args:
         new_hostname: New hostname to set.
@@ -88,56 +89,29 @@ def set_hostname(new_hostname: str) -> None:
 
     logger.info(f"Setting hostname to: {new_hostname}")
 
+    # Path to the helper script
+    helper_script = "/opt/printserver/scripts/set-hostname.sh"
+
     try:
-        # Set transient hostname (immediate effect)
+        # Use sudo to run the helper script
         result = subprocess.run(
-            ["hostnamectl", "set-hostname", new_hostname],
+            ["sudo", helper_script, new_hostname],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=30,
         )
+
         if result.returncode != 0:
-            raise SystemUtilsError(f"Failed to set hostname: {result.stderr}")
-
-        # Update /etc/hostname (persistent)
-        with open("/etc/hostname", "w") as f:
-            f.write(new_hostname + "\n")
-
-        # Update /etc/hosts (replace old hostname with new)
-        old_hostname = get_hostname()
-        try:
-            with open("/etc/hosts", "r") as f:
-                hosts_content = f.read()
-
-            # Replace old hostname in hosts file
-            hosts_content = hosts_content.replace(
-                f"127.0.1.1\t{old_hostname}", f"127.0.1.1\t{new_hostname}"
-            )
-
-            with open("/etc/hosts", "w") as f:
-                f.write(hosts_content)
-        except Exception as e:
-            logger.warning(f"Could not update /etc/hosts: {e}")
-
-        # Restart Avahi to broadcast new hostname
-        try:
-            subprocess.run(
-                ["systemctl", "restart", "avahi-daemon"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            logger.info("Restarted Avahi daemon to broadcast new hostname")
-        except Exception as e:
-            logger.warning(f"Could not restart Avahi: {e}")
+            error_output = result.stderr.strip() or result.stdout.strip()
+            raise SystemUtilsError(f"Failed to set hostname: {error_output}")
 
         logger.info(f"Hostname successfully changed to: {new_hostname}")
 
     except subprocess.TimeoutExpired:
         raise SystemUtilsError("Timeout setting hostname")
-    except PermissionError:
+    except FileNotFoundError:
         raise SystemUtilsError(
-            "Permission denied. Hostname change requires root privileges."
+            "Hostname helper script not found. Please run install.sh"
         )
     except Exception as e:
         raise SystemUtilsError(f"Error setting hostname: {e}") from e

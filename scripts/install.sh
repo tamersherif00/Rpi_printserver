@@ -158,7 +158,34 @@ install_python_app() {
     # Copy application files
     cp -r "$PROJECT_DIR/src/"* "$INSTALL_DIR/"
 
+    # Copy and set up helper scripts
+    mkdir -p "$INSTALL_DIR/scripts"
+    cp "$SCRIPT_DIR/set-hostname.sh" "$INSTALL_DIR/scripts/"
+    chmod +x "$INSTALL_DIR/scripts/set-hostname.sh"
+
     log_info "Python application installed"
+}
+
+configure_sudoers() {
+    log_info "Configuring sudoers for hostname changes..."
+
+    # Create sudoers entry to allow the web service to change hostname
+    SUDOERS_FILE="/etc/sudoers.d/printserver"
+
+    cat > "$SUDOERS_FILE" << 'EOF'
+# Allow printserver web service to change hostname without password
+ALL ALL=(root) NOPASSWD: /opt/printserver/scripts/set-hostname.sh
+EOF
+
+    chmod 440 "$SUDOERS_FILE"
+
+    # Validate sudoers file
+    if visudo -c -f "$SUDOERS_FILE" > /dev/null 2>&1; then
+        log_info "Sudoers configuration created successfully"
+    else
+        log_error "Invalid sudoers configuration, removing..."
+        rm -f "$SUDOERS_FILE"
+    fi
 }
 
 create_default_config() {
@@ -287,6 +314,22 @@ print_summary() {
     echo
 }
 
+fix_hosts_file() {
+    log_info "Ensuring /etc/hosts is configured correctly..."
+
+    CURRENT_HOSTNAME=$(hostname)
+
+    # Check if 127.0.1.1 entry exists for current hostname
+    if ! grep -q "127.0.1.1.*$CURRENT_HOSTNAME" /etc/hosts; then
+        # Remove any existing 127.0.1.1 line and add correct one
+        sed -i '/127.0.1.1/d' /etc/hosts
+        echo -e "127.0.1.1\t$CURRENT_HOSTNAME" >> /etc/hosts
+        log_info "Added hostname entry to /etc/hosts"
+    else
+        log_info "/etc/hosts already configured correctly"
+    fi
+}
+
 # Main installation flow
 main() {
     echo "========================================"
@@ -301,6 +344,8 @@ main() {
     create_directories
     install_python_app
     create_default_config
+    configure_sudoers
+    fix_hosts_file
     configure_cups
     configure_avahi
     install_systemd_service
