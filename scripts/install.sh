@@ -245,6 +245,32 @@ start_services() {
     log_info "Services started"
 }
 
+restart_services() {
+    log_info "Restarting services to apply updates..."
+
+    # Restart CUPS to apply configuration changes
+    systemctl restart cups
+    sleep 1
+
+    # Restart Avahi to apply AirPrint changes
+    systemctl restart avahi-daemon
+    sleep 1
+
+    # Restart web interface to apply code updates
+    systemctl restart printserver-web
+    sleep 1
+
+    # Verify all services are running
+    if systemctl is-active --quiet cups && \
+       systemctl is-active --quiet avahi-daemon && \
+       systemctl is-active --quiet printserver-web; then
+        log_info "All services restarted successfully"
+    else
+        log_warn "Some services may not have started correctly. Check status with:"
+        log_warn "  systemctl status cups avahi-daemon printserver-web"
+    fi
+}
+
 detect_printer() {
     log_info "Detecting USB printers..."
 
@@ -298,7 +324,11 @@ enable_all_printers() {
 print_summary() {
     echo
     echo "========================================"
-    echo "  Print Server Installation Complete!"
+    if [[ "$IS_UPDATE" == "true" ]]; then
+        echo "  Print Server Update Complete!"
+    else
+        echo "  Print Server Installation Complete!"
+    fi
     echo "========================================"
     echo
     log_info "Web interface: http://$(hostname -I | awk '{print $1}'):5000"
@@ -310,6 +340,11 @@ print_summary() {
     if lpstat -p > /dev/null 2>&1; then
         log_info "Configured printers:"
         lpstat -p
+    fi
+    echo
+    if [[ "$IS_UPDATE" == "true" ]]; then
+        log_info "All services have been restarted to apply updates"
+        log_info "Your print server is now running the latest version"
     fi
     echo
 }
@@ -340,6 +375,15 @@ main() {
     check_root
     check_raspberry_pi
 
+    # Check if this is an update (service already exists)
+    IS_UPDATE=false
+    if systemctl is-enabled --quiet printserver-web 2>/dev/null; then
+        IS_UPDATE=true
+        log_info "Existing installation detected - performing update"
+    else
+        log_info "Performing fresh installation"
+    fi
+
     install_system_packages
     create_directories
     install_python_app
@@ -349,9 +393,16 @@ main() {
     configure_cups
     configure_avahi
     install_systemd_service
-    start_services
-    detect_printer
-    enable_all_printers
+
+    # If updating, restart services; otherwise start them fresh
+    if [[ "$IS_UPDATE" == "true" ]]; then
+        restart_services
+    else
+        start_services
+        detect_printer
+        enable_all_printers
+    fi
+
     print_summary
 }
 
