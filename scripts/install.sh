@@ -33,6 +33,9 @@ check_root() {
         log_error "This script must be run as root (use sudo)"
         exit 1
     fi
+
+    # Get the actual user who ran sudo (for later user configuration)
+    ACTUAL_USER="${SUDO_USER:-$USER}"
 }
 
 check_raspberry_pi() {
@@ -95,6 +98,12 @@ install_system_packages() {
     # Gutenprint - additional printer support
     if apt-cache show printer-driver-gutenprint > /dev/null 2>&1; then
         apt-get install -y printer-driver-gutenprint
+    fi
+
+    # Add user to lpadmin group for CUPS administration
+    if [[ -n "$ACTUAL_USER" ]] && [[ "$ACTUAL_USER" != "root" ]]; then
+        log_info "Adding user '$ACTUAL_USER' to lpadmin group..."
+        usermod -a -G lpadmin "$ACTUAL_USER"
     fi
 
     log_info "System packages installed successfully"
@@ -232,11 +241,31 @@ detect_printer() {
         else
             log_info "Printer '$PRINTER_NAME' already configured"
         fi
+
+        # Enable printer and set to accept jobs
+        log_info "Configuring printer to accept jobs..."
+        cupsenable "$PRINTER_NAME" 2>/dev/null || true
+        cupsaccept "$PRINTER_NAME" 2>/dev/null || true
+        log_info "Printer configured and ready"
     else
         log_warn "No USB printer detected. Please connect your printer and run:"
         log_warn "  sudo lpinfo -v  # to list available printers"
         log_warn "  sudo lpadmin -p PrinterName -E -v usb://... -m everywhere"
+        log_warn "  sudo cupsenable PrinterName && sudo cupsaccept PrinterName"
     fi
+}
+
+enable_all_printers() {
+    log_info "Enabling all configured printers..."
+
+    # Get list of all printers and enable them
+    lpstat -p 2>/dev/null | awk '{print $2}' | while read -r printer; do
+        if [[ -n "$printer" ]]; then
+            log_info "Enabling printer: $printer"
+            cupsenable "$printer" 2>/dev/null || true
+            cupsaccept "$printer" 2>/dev/null || true
+        fi
+    done
 }
 
 print_summary() {
@@ -277,6 +306,7 @@ main() {
     install_systemd_service
     start_services
     detect_printer
+    enable_all_printers
     print_summary
 }
 
