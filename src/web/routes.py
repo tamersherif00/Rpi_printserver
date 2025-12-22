@@ -146,7 +146,8 @@ def register_routes(app: Flask) -> None:
         """Render the main dashboard page."""
         try:
             client = get_cups_client(app)
-            printers = get_all_printers(client)
+            # Exclude virtual printers (PDF, etc.) from dashboard
+            printers = get_all_printers(client, include_virtual=False)
             server_status = get_server_status()
             server_status["printers"] = [p.to_summary_dict() for p in printers]
         except CupsClientError:
@@ -445,6 +446,34 @@ def register_routes(app: Flask) -> None:
             return jsonify({
                 "total_jobs": len(jobs_data),
                 "jobs": debug_data,
+            })
+        except CupsClientError as e:
+            return jsonify({"error": str(e), "code": "CUPS_ERROR"}), 500
+
+    @app.route("/api/debug/printers")
+    def api_debug_printers():
+        """Debug endpoint to inspect raw CUPS printer data.
+
+        This endpoint returns raw CUPS printer attributes for debugging purposes.
+        """
+        try:
+            client = get_cups_client(app)
+            printers_data = client.get_printers()
+
+            # Convert to JSON-serializable format
+            debug_data = {}
+            for printer_name, printer_attrs in printers_data.items():
+                debug_data[printer_name] = {
+                    "attributes": {
+                        k: str(v) if not isinstance(v, (str, int, float, bool, type(None)))
+                        else v
+                        for k, v in printer_attrs.items()
+                    }
+                }
+
+            return jsonify({
+                "total_printers": len(printers_data),
+                "printers": debug_data,
             })
         except CupsClientError as e:
             return jsonify({"error": str(e), "code": "CUPS_ERROR"}), 500

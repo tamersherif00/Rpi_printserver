@@ -31,16 +31,36 @@ class Printer:
         Returns:
             Printer instance.
         """
+        # Try multiple attribute name variations for accepting jobs
+        is_accepting = (
+            data.get("printer-is-accepting-jobs")
+            or data.get("printer_is_accepting_jobs")
+            or False
+        )
+        # Handle both boolean and integer representations (1=True, 0=False)
+        if isinstance(is_accepting, int):
+            is_accepting = bool(is_accepting)
+
         return cls(
             name=name,
-            uri=data.get("device-uri", ""),
-            status=get_printer_state_string(data.get("printer-state", 0)),
-            status_message=data.get("printer-state-message", ""),
-            is_accepting_jobs=data.get("printer-is-accepting-jobs", False),
-            is_shared=data.get("printer-is-shared", False),
-            make_model=data.get("printer-make-and-model", "Unknown"),
-            location=data.get("printer-location"),
-            info=data.get("printer-info"),
+            uri=data.get("device-uri") or data.get("device_uri", ""),
+            status=get_printer_state_string(
+                data.get("printer-state") or data.get("printer_state", 0)
+            ),
+            status_message=(
+                data.get("printer-state-message")
+                or data.get("printer_state_message", "")
+            ),
+            is_accepting_jobs=is_accepting,
+            is_shared=bool(
+                data.get("printer-is-shared") or data.get("printer_is_shared", False)
+            ),
+            make_model=(
+                data.get("printer-make-and-model")
+                or data.get("printer_make_and_model", "Unknown")
+            ),
+            location=data.get("printer-location") or data.get("printer_location"),
+            info=data.get("printer-info") or data.get("printer_info"),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -93,19 +113,36 @@ class Printer:
         return self.is_online and self.is_accepting_jobs
 
 
-def get_all_printers(cups_client: CupsClient) -> list[Printer]:
+def get_all_printers(
+    cups_client: CupsClient, include_virtual: bool = True
+) -> list[Printer]:
     """Get all printers from CUPS.
 
     Args:
         cups_client: Connected CUPS client.
+        include_virtual: Include virtual printers like PDF (default: True).
 
     Returns:
         List of Printer instances.
     """
     printers_data = cups_client.get_printers()
-    return [
+    printers = [
         Printer.from_cups_data(name, data) for name, data in printers_data.items()
     ]
+
+    # Filter out virtual printers if requested
+    if not include_virtual:
+        printers = [
+            p
+            for p in printers
+            if not any(
+                virtual in p.name.lower()
+                for virtual in ["pdf", "cups-pdf", "virtual"]
+            )
+            and not p.uri.startswith("cups-pdf:")
+        ]
+
+    return printers
 
 
 def get_printer(cups_client: CupsClient, name: str) -> Optional[Printer]:
