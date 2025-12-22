@@ -34,35 +34,79 @@ class PrintJob:
         Returns:
             PrintJob instance.
         """
-        # Parse timestamps
+        # Parse timestamps - try multiple attribute names
         created_at = None
         completed_at = None
 
-        if "time-at-creation" in data:
-            try:
-                created_at = datetime.fromtimestamp(data["time-at-creation"])
-            except (ValueError, TypeError):
-                pass
+        # Try different timestamp attribute names
+        for ts_attr in ["time-at-creation", "time_at_creation"]:
+            if ts_attr in data:
+                try:
+                    created_at = datetime.fromtimestamp(data[ts_attr])
+                    break
+                except (ValueError, TypeError):
+                    pass
 
-        if "time-at-completed" in data:
-            try:
-                completed_at = datetime.fromtimestamp(data["time-at-completed"])
-            except (ValueError, TypeError):
-                pass
+        for ts_attr in ["time-at-completed", "time_at_completed"]:
+            if ts_attr in data:
+                try:
+                    completed_at = datetime.fromtimestamp(data[ts_attr])
+                    break
+                except (ValueError, TypeError):
+                    pass
 
-        # Extract printer name from URI
-        printer_uri = data.get("job-printer-uri", "")
+        # Extract printer name from URI - try multiple attribute names
+        printer_uri = data.get("job-printer-uri") or data.get("job_printer_uri", "")
         printer_name = printer_uri.split("/")[-1] if printer_uri else ""
+
+        # Get job title - try multiple attribute names and handle byte strings
+        title = data.get("job-name") or data.get("job_name", "Untitled")
+        if isinstance(title, bytes):
+            title = title.decode("utf-8", errors="replace")
+        if not title or title == "":
+            title = "Untitled"
+
+        # Get username - try multiple attribute names
+        user = (
+            data.get("job-originating-user-name")
+            or data.get("job_originating_user_name")
+            or "unknown"
+        )
+        if isinstance(user, bytes):
+            user = user.decode("utf-8", errors="replace")
+
+        # Get state message
+        state_message = (
+            data.get("job-state-message") or data.get("job_state_message", "")
+        )
+        if isinstance(state_message, bytes):
+            state_message = state_message.decode("utf-8", errors="replace")
+
+        # Get job state - try multiple attribute names
+        job_state = data.get("job-state") or data.get("job_state", 0)
+        state = get_job_state_string(job_state)
+
+        # Get page counts - try multiple attribute names
+        pages = data.get("job-media-sheets") or data.get("job_media_sheets")
+        pages_completed = (
+            data.get("job-media-sheets-completed")
+            or data.get("job_media_sheets_completed")
+            or 0
+        )
+
+        # Get size - try multiple attribute names
+        size_kb = data.get("job-k-octets") or data.get("job_k_octets", 0)
+        size = size_kb * 1024  # Convert to bytes
 
         return cls(
             id=job_id,
-            title=data.get("job-name", "Untitled"),
-            user=data.get("job-originating-user-name", "unknown"),
-            state=get_job_state_string(data.get("job-state", 0)),
-            state_message=data.get("job-state-message", ""),
-            size=data.get("job-k-octets", 0) * 1024,  # Convert to bytes
-            pages=data.get("job-media-sheets"),
-            pages_completed=data.get("job-media-sheets-completed", 0),
+            title=title,
+            user=user,
+            state=state,
+            state_message=state_message,
+            size=size,
+            pages=pages,
+            pages_completed=pages_completed,
             created_at=created_at,
             completed_at=completed_at,
             printer_name=printer_name,

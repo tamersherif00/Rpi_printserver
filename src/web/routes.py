@@ -421,4 +421,32 @@ def register_routes(app: Flask) -> None:
             "error": error_msg,
         })
 
+    @app.route("/api/debug/jobs")
+    def api_debug_jobs():
+        """Debug endpoint to inspect raw CUPS job data.
+
+        This endpoint returns raw CUPS job attributes for debugging purposes.
+        """
+        try:
+            client = get_cups_client(app)
+            jobs_data = client.get_jobs(which_jobs="all")
+
+            # Convert to JSON-serializable format
+            debug_data = {}
+            for job_id, job_attrs in jobs_data.items():
+                debug_data[str(job_id)] = {
+                    "attributes": {
+                        k: str(v) if not isinstance(v, (str, int, float, bool, type(None)))
+                        else v
+                        for k, v in job_attrs.items()
+                    }
+                }
+
+            return jsonify({
+                "total_jobs": len(jobs_data),
+                "jobs": debug_data,
+            })
+        except CupsClientError as e:
+            return jsonify({"error": str(e), "code": "CUPS_ERROR"}), 500
+
     logger.info("Routes registered")

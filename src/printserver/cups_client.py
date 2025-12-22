@@ -123,6 +123,7 @@ class CupsClient:
         printer_name: Optional[str] = None,
         which_jobs: str = "all",
         my_jobs: bool = False,
+        requested_attributes: Optional[list[str]] = None,
     ) -> dict[int, dict[str, Any]]:
         """Get print jobs.
 
@@ -130,6 +131,7 @@ class CupsClient:
             printer_name: Filter by printer name (optional).
             which_jobs: Filter type: 'all', 'completed', 'not-completed'.
             my_jobs: Only show current user's jobs.
+            requested_attributes: Specific attributes to request (optional).
 
         Returns:
             Dictionary of job IDs to job attributes.
@@ -138,10 +140,24 @@ class CupsClient:
             CupsClientError: If operation fails.
         """
         try:
-            return self.connection.getJobs(
-                which_jobs=which_jobs,
-                my_jobs=my_jobs,
-            )
+            # Request all relevant attributes for better job information
+            kwargs = {
+                "which_jobs": which_jobs,
+                "my_jobs": my_jobs,
+            }
+
+            # Add requested attributes if specified
+            if requested_attributes:
+                kwargs["requested_attributes"] = requested_attributes
+
+            jobs = self.connection.getJobs(**kwargs)
+
+            # Log job data for debugging (only in development)
+            if logger.isEnabledFor(logging.DEBUG):
+                for job_id, job_data in jobs.items():
+                    logger.debug(f"Job {job_id} attributes: {job_data.keys()}")
+
+            return jobs
         except Exception as e:
             logger.error(f"Failed to get jobs: {e}")
             raise CupsClientError(f"Failed to get jobs: {e}") from e
