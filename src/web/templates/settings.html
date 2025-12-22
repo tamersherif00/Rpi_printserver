@@ -19,65 +19,14 @@
                 <h5 class="mb-0"><i class="bi bi-hdd-network"></i> System Settings</h5>
             </div>
             <div class="card-body">
-                <!-- Hostname Settings -->
-                <div class="mb-4">
-                    <label for="hostnameInput" class="form-label fw-bold">
-                        Print Server Name (Hostname)
-                    </label>
-                    <p class="text-muted small mb-2">
-                        This is the name your print server will use on the network.
-                        It will appear as <code id="hostnamePreview">hostname.local</code> on your devices.
-                    </p>
-
-                    <div class="input-group mb-2">
-                        <input
-                            type="text"
-                            class="form-control"
-                            id="hostnameInput"
-                            placeholder="printserver"
-                            maxlength="63"
-                            pattern="[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]"
-                            disabled
-                        >
-                        <button
-                            class="btn btn-outline-secondary"
-                            type="button"
-                            id="editHostnameBtn"
-                            onclick="enableHostnameEdit()"
-                        >
-                            <i class="bi bi-pencil"></i> Edit
-                        </button>
-                        <button
-                            class="btn btn-primary"
-                            type="button"
-                            id="saveHostnameBtn"
-                            onclick="saveHostname()"
-                            style="display: none;"
-                        >
-                            <i class="bi bi-check-lg"></i> Save
-                        </button>
-                        <button
-                            class="btn btn-outline-secondary"
-                            type="button"
-                            id="cancelHostnameBtn"
-                            onclick="cancelHostnameEdit()"
-                            style="display: none;"
-                        >
-                            <i class="bi bi-x-lg"></i> Cancel
-                        </button>
-                    </div>
-
-                    <div id="hostnameValidation" class="form-text text-danger" style="display: none;"></div>
-                    <div class="form-text">
-                        <i class="bi bi-info-circle"></i>
-                        Allowed: letters, numbers, and hyphens. Cannot start or end with hyphen.
-                    </div>
-                </div>
-
-                <!-- Permission Warning -->
-                <div id="permissionWarning" class="alert alert-warning" style="display: none;">
-                    <i class="bi bi-exclamation-triangle"></i>
-                    <strong>Permission required:</strong> The service must run as root to change the hostname.
+                <p class="text-muted">
+                    <i class="bi bi-info-circle"></i>
+                    System settings can be configured through the CUPS admin interface or via SSH.
+                </p>
+                <div class="d-grid gap-2">
+                    <a href="http://{{ server_info.ip_address }}:631/admin" target="_blank" class="btn btn-outline-primary">
+                        <i class="bi bi-box-arrow-up-right"></i> Open CUPS Administration
+                    </a>
                 </div>
             </div>
         </div>
@@ -92,8 +41,8 @@
                     <dt class="col-sm-4">Version</dt>
                     <dd class="col-sm-8">1.0.0</dd>
 
-                    <dt class="col-sm-4">Current Hostname</dt>
-                    <dd class="col-sm-8"><code id="currentHostname">Loading...</code></dd>
+                    <dt class="col-sm-4">Hostname</dt>
+                    <dd class="col-sm-8"><code>{{ server_info.hostname }}</code></dd>
 
                     <dt class="col-sm-4">IP Address</dt>
                     <dd class="col-sm-8"><code>{{ server_info.ip_address }}</code></dd>
@@ -129,12 +78,12 @@
             </div>
             <div class="card-body">
                 <p class="small mb-2">
-                    <strong>Changing hostname:</strong> After changing the hostname,
-                    devices will find the print server at the new name (e.g., <code>new-name.local</code>).
+                    <strong>CUPS Admin:</strong> Manage printers, print jobs, and server settings
+                    through the CUPS web interface.
                 </p>
                 <p class="small mb-0">
-                    <strong>Note:</strong> Hostname changes take effect immediately.
-                    You may need to reconnect to the new address.
+                    <strong>SSH Access:</strong> For advanced configuration, connect via SSH
+                    to configure system settings directly.
                 </p>
             </div>
         </div>
@@ -147,164 +96,4 @@
 </div>
 {% endblock %}
 
-{% block scripts %}
-<script>
-let originalHostname = '';
-let currentHostname = '';
-
-// Load current hostname on page load
-document.addEventListener('DOMContentLoaded', async function() {
-    await loadHostname();
-});
-
-async function loadHostname() {
-    try {
-        const response = await fetch('/api/system/hostname');
-        const data = await response.json();
-
-        currentHostname = data.hostname;
-        originalHostname = data.hostname;
-
-        document.getElementById('hostnameInput').value = currentHostname;
-        document.getElementById('currentHostname').textContent = currentHostname;
-        document.getElementById('hostnamePreview').textContent = currentHostname + '.local';
-
-        // Show permission warning if can't change
-        if (!data.can_change) {
-            document.getElementById('permissionWarning').style.display = 'block';
-            document.getElementById('editHostnameBtn').disabled = true;
-        }
-    } catch (error) {
-        console.error('Error loading hostname:', error);
-        showToast('Failed to load hostname', 'error');
-    }
-}
-
-function enableHostnameEdit() {
-    const input = document.getElementById('hostnameInput');
-    const editBtn = document.getElementById('editHostnameBtn');
-    const saveBtn = document.getElementById('saveHostnameBtn');
-    const cancelBtn = document.getElementById('cancelHostnameBtn');
-
-    input.disabled = false;
-    input.focus();
-    editBtn.style.display = 'none';
-    saveBtn.style.display = 'inline-block';
-    cancelBtn.style.display = 'inline-block';
-
-    // Real-time validation
-    input.addEventListener('input', validateHostnameInput);
-}
-
-function cancelHostnameEdit() {
-    const input = document.getElementById('hostnameInput');
-    const editBtn = document.getElementById('editHostnameBtn');
-    const saveBtn = document.getElementById('saveHostnameBtn');
-    const cancelBtn = document.getElementById('cancelHostnameBtn');
-    const validation = document.getElementById('hostnameValidation');
-
-    input.value = originalHostname;
-    input.disabled = true;
-    editBtn.style.display = 'inline-block';
-    saveBtn.style.display = 'none';
-    cancelBtn.style.display = 'none';
-    validation.style.display = 'none';
-}
-
-async function validateHostnameInput() {
-    const input = document.getElementById('hostnameInput');
-    const validation = document.getElementById('hostnameValidation');
-    const saveBtn = document.getElementById('saveHostnameBtn');
-    const hostname = input.value.trim();
-
-    if (hostname === originalHostname) {
-        validation.style.display = 'none';
-        saveBtn.disabled = true;
-        return;
-    }
-
-    if (!hostname) {
-        validation.textContent = 'Hostname cannot be empty';
-        validation.style.display = 'block';
-        saveBtn.disabled = true;
-        return;
-    }
-
-    try {
-        const response = await fetch('/api/system/hostname/validate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ hostname })
-        });
-
-        const data = await response.json();
-
-        if (data.valid) {
-            validation.style.display = 'none';
-            saveBtn.disabled = false;
-            document.getElementById('hostnamePreview').textContent = hostname + '.local';
-        } else {
-            validation.textContent = data.error;
-            validation.style.display = 'block';
-            saveBtn.disabled = true;
-        }
-    } catch (error) {
-        console.error('Error validating hostname:', error);
-    }
-}
-
-async function saveHostname() {
-    const input = document.getElementById('hostnameInput');
-    const newHostname = input.value.trim();
-
-    if (newHostname === originalHostname) {
-        cancelHostnameEdit();
-        return;
-    }
-
-    const saveBtn = document.getElementById('saveHostnameBtn');
-    const cancelBtn = document.getElementById('cancelHostnameBtn');
-
-    // Disable buttons during save
-    saveBtn.disabled = true;
-    cancelBtn.disabled = true;
-    saveBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Saving...';
-
-    try {
-        const response = await fetch('/api/system/hostname', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ hostname: newHostname })
-        });
-
-        const data = await response.json();
-
-        if (response.ok) {
-            showToast(`Hostname changed to '${newHostname}'. The print server is now available at ${newHostname}.local`, 'success');
-            originalHostname = newHostname;
-            currentHostname = newHostname;
-            document.getElementById('currentHostname').textContent = newHostname;
-            cancelHostnameEdit();
-
-            // Show reconnection notice
-            setTimeout(() => {
-                if (confirm('Hostname changed successfully! Would you like to reconnect to the new address?')) {
-                    window.location.href = `http://${newHostname}.local:5000/settings`;
-                }
-            }, 2000);
-        } else {
-            showToast(data.error || 'Failed to change hostname', 'error');
-            saveBtn.disabled = false;
-            cancelBtn.disabled = false;
-            saveBtn.innerHTML = '<i class="bi bi-check-lg"></i> Save';
-        }
-    } catch (error) {
-        console.error('Error saving hostname:', error);
-        showToast('Failed to save hostname', 'error');
-        saveBtn.disabled = false;
-        cancelBtn.disabled = false;
-        saveBtn.innerHTML = '<i class="bi bi-check-lg"></i> Save';
-    }
-}
-</script>
 {% endblock %}
