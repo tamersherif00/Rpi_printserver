@@ -19,6 +19,30 @@ async function refreshStatus() {
 }
 
 /**
+ * Refresh dashboard with visual feedback
+ */
+async function refreshDashboard() {
+    const btn = document.getElementById('refreshBtn');
+    if (!btn) return;
+
+    // Add loading state
+    btn.disabled = true;
+    btn.classList.add('btn-refreshing');
+
+    try {
+        await refreshStatus();
+        showToast('Dashboard refreshed', 'success');
+    } catch (error) {
+        console.error('Error refreshing dashboard:', error);
+        showToast('Failed to refresh dashboard', 'error');
+    } finally {
+        // Remove loading state
+        btn.disabled = false;
+        btn.classList.remove('btn-refreshing');
+    }
+}
+
+/**
  * Update dashboard with new status data
  */
 function updateDashboard(data) {
@@ -51,6 +75,30 @@ async function refreshJobs() {
     } catch (error) {
         console.error('Error refreshing jobs:', error);
         showToast('Failed to refresh jobs', 'error');
+    }
+}
+
+/**
+ * Refresh jobs with visual feedback
+ */
+async function refreshJobsWithFeedback() {
+    const btn = document.getElementById('refreshJobsBtn');
+    if (!btn) return;
+
+    // Add loading state
+    btn.disabled = true;
+    btn.classList.add('btn-refreshing');
+
+    try {
+        await refreshJobs();
+        showToast('Jobs refreshed', 'success');
+    } catch (error) {
+        console.error('Error refreshing jobs:', error);
+        showToast('Failed to refresh jobs', 'error');
+    } finally {
+        // Remove loading state
+        btn.disabled = false;
+        btn.classList.remove('btn-refreshing');
     }
 }
 

@@ -130,30 +130,65 @@
 <!-- Quick Actions -->
 <div class="row mt-4">
     <div class="col-12">
-        <h2 class="mb-3"><i class="bi bi-lightning"></i> Quick Actions</h2>
+        <h2 class="mb-3"><i class="bi bi-lightning-fill"></i> Quick Actions</h2>
     </div>
 </div>
 
-<div class="row">
-    <div class="col-md-6 col-lg-3 mb-3">
-        <a href="/queue" class="btn btn-outline-primary w-100">
-            <i class="bi bi-list-task"></i> View Print Queue
+<div class="row g-3 mb-4">
+    <!-- Primary Actions -->
+    <div class="col-sm-6 col-lg-3">
+        <a href="/queue" class="btn btn-outline-primary w-100 quick-action-btn">
+            <i class="bi bi-list-task"></i>
+            <span>Print Queue</span>
         </a>
     </div>
-    <div class="col-md-6 col-lg-3 mb-3">
-        <a href="/settings" class="btn btn-outline-secondary w-100">
-            <i class="bi bi-gear"></i> Settings
-        </a>
-    </div>
-    <div class="col-md-6 col-lg-3 mb-3">
-        <a href="http://{{ server_status.ip_address }}:631" target="_blank" class="btn btn-outline-info w-100">
-            <i class="bi bi-tools"></i> CUPS Admin
-        </a>
-    </div>
-    <div class="col-md-6 col-lg-3 mb-3">
-        <button class="btn btn-outline-secondary w-100" onclick="refreshStatus()">
-            <i class="bi bi-arrow-clockwise"></i> Refresh Status
+    <div class="col-sm-6 col-lg-3">
+        <button id="refreshBtn" class="btn btn-outline-success w-100 quick-action-btn" onclick="refreshDashboard()">
+            <i class="bi bi-arrow-clockwise"></i>
+            <span>Refresh</span>
         </button>
+    </div>
+    <div class="col-sm-6 col-lg-3">
+        <a href="http://{{ server_status.ip_address }}:631" target="_blank" class="btn btn-outline-info w-100 quick-action-btn">
+            <i class="bi bi-box-arrow-up-right"></i>
+            <span>CUPS Admin</span>
+        </a>
+    </div>
+    <div class="col-sm-6 col-lg-3">
+        <a href="/settings" class="btn btn-outline-secondary w-100 quick-action-btn">
+            <i class="bi bi-gear-fill"></i>
+            <span>Settings</span>
+        </a>
+    </div>
+</div>
+
+<!-- System Actions -->
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-terminal"></i> System Actions</h5>
+            </div>
+            <div class="card-body">
+                <div class="row g-2">
+                    <div class="col-sm-6 col-md-4">
+                        <a href="http://{{ server_status.ip_address }}:631/printers" target="_blank" class="btn btn-outline-primary w-100">
+                            <i class="bi bi-printer"></i> Manage Printers
+                        </a>
+                    </div>
+                    <div class="col-sm-6 col-md-4">
+                        <a href="http://{{ server_status.ip_address }}:631/jobs" target="_blank" class="btn btn-outline-success w-100">
+                            <i class="bi bi-file-text"></i> View All Jobs
+                        </a>
+                    </div>
+                    <div class="col-sm-6 col-md-4">
+                        <a href="http://{{ server_status.ip_address }}:631/admin" target="_blank" class="btn btn-outline-warning w-100">
+                            <i class="bi bi-shield-lock"></i> Admin Panel
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 </div>
 {% endblock %}

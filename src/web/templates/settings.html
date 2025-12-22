@@ -58,15 +58,21 @@
     <div class="col-lg-4">
         <div class="card mb-4">
             <div class="card-header">
-                <h5 class="mb-0"><i class="bi bi-lightning"></i> Quick Actions</h5>
+                <h5 class="mb-0"><i class="bi bi-lightning-fill"></i> Quick Actions</h5>
             </div>
             <div class="card-body">
                 <div class="d-grid gap-2">
-                    <a href="http://{{ server_info.ip_address }}:631" target="_blank" class="btn btn-outline-primary">
-                        <i class="bi bi-box-arrow-up-right"></i> Open CUPS Admin
+                    <a href="/" class="btn btn-outline-primary">
+                        <i class="bi bi-speedometer2"></i> Dashboard
+                    </a>
+                    <a href="/queue" class="btn btn-outline-success">
+                        <i class="bi bi-list-task"></i> Print Queue
+                    </a>
+                    <a href="http://{{ server_info.ip_address }}:631" target="_blank" class="btn btn-outline-info">
+                        <i class="bi bi-box-arrow-up-right"></i> CUPS Admin
                     </a>
                     <button class="btn btn-outline-secondary" onclick="window.location.reload()">
-                        <i class="bi bi-arrow-clockwise"></i> Refresh Page
+                        <i class="bi bi-arrow-clockwise"></i> Refresh
                     </button>
                 </div>
             </div>
