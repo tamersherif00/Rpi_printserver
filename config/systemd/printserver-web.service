@@ -19,8 +19,6 @@ ExecReload=/bin/kill -HUP $MAINPID
 # Restart configuration
 Restart=always
 RestartSec=5
-StartLimitIntervalSec=60
-StartLimitBurst=5
 
 # Security hardening
 NoNewPrivileges=true
