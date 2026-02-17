@@ -1,0 +1,521 @@
+{% extends "base.html" %}
+
+{% block title %}Diagnostics - Print Server{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <div>
+                <h1 class="mb-1">
+                    <i class="bi bi-wrench"></i> Diagnostics
+                </h1>
+                <p class="text-muted mb-0">System health, service status, and logs — no SSH required.</p>
+            </div>
+            <div class="d-flex gap-2">
+                <a href="/api/diagnostics/export" class="btn btn-sm btn-outline-secondary" title="Download full diagnostics bundle">
+                    <i class="bi bi-download"></i> Export
+                </a>
+                <button id="refreshDiagBtn" class="btn btn-sm btn-outline-success" onclick="refreshDiagnostics()">
+                    <i class="bi bi-arrow-clockwise"></i> Refresh
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Health Summary Cards -->
+<div class="row mb-4" id="health-cards">
+    <div class="col-md-3 col-sm-6 mb-3">
+        <div class="card h-100" id="card-cups">
+            <div class="card-body text-center">
+                <i class="bi bi-printer fs-2" id="icon-cups"></i>
+                <h6 class="mt-2">CUPS</h6>
+                <span class="badge" id="badge-cups">Checking...</span>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 col-sm-6 mb-3">
+        <div class="card h-100" id="card-avahi">
+            <div class="card-body text-center">
+                <i class="bi bi-broadcast fs-2" id="icon-avahi"></i>
+                <h6 class="mt-2">Avahi (AirPrint)</h6>
+                <span class="badge" id="badge-avahi">Checking...</span>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 col-sm-6 mb-3">
+        <div class="card h-100" id="card-network">
+            <div class="card-body text-center">
+                <i class="bi bi-wifi fs-2" id="icon-network"></i>
+                <h6 class="mt-2">Network</h6>
+                <span class="badge" id="badge-network">Checking...</span>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 col-sm-6 mb-3">
+        <div class="card h-100" id="card-hardware">
+            <div class="card-body text-center">
+                <i class="bi bi-cpu fs-2" id="icon-hardware"></i>
+                <h6 class="mt-2">Hardware</h6>
+                <span class="badge" id="badge-hardware">Checking...</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Services Detail -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header" data-bs-toggle="collapse" data-bs-target="#services-detail" style="cursor:pointer;">
+                <h5 class="mb-0"><i class="bi bi-gear-wide-connected"></i> Services <i class="bi bi-chevron-down float-end"></i></h5>
+            </div>
+            <div id="services-detail" class="collapse show">
+                <div class="card-body">
+                    <table class="table table-sm mb-0" id="services-table">
+                        <thead><tr><th>Service</th><th>State</th><th>Sub-state</th><th>Since</th><th>Actions</th></tr></thead>
+                        <tbody><tr><td colspan="5" class="text-muted">Loading...</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Printers & AirPrint -->
+<div class="row mb-4">
+    <div class="col-md-7 mb-3">
+        <div class="card h-100">
+            <div class="card-header" data-bs-toggle="collapse" data-bs-target="#printers-detail" style="cursor:pointer;">
+                <h5 class="mb-0"><i class="bi bi-printer"></i> Printers <i class="bi bi-chevron-down float-end"></i></h5>
+            </div>
+            <div id="printers-detail" class="collapse show">
+                <div class="card-body" id="printers-info">
+                    <p class="text-muted">Loading...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-5 mb-3">
+        <div class="card h-100">
+            <div class="card-header" data-bs-toggle="collapse" data-bs-target="#airprint-detail" style="cursor:pointer;">
+                <h5 class="mb-0"><i class="bi bi-broadcast-pin"></i> AirPrint Discovery <i class="bi bi-chevron-down float-end"></i></h5>
+            </div>
+            <div id="airprint-detail" class="collapse show">
+                <div class="card-body" id="airprint-info">
+                    <p class="text-muted">Loading...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Network & Hardware -->
+<div class="row mb-4">
+    <div class="col-md-6 mb-3">
+        <div class="card h-100">
+            <div class="card-header" data-bs-toggle="collapse" data-bs-target="#network-detail" style="cursor:pointer;">
+                <h5 class="mb-0"><i class="bi bi-hdd-network"></i> Network <i class="bi bi-chevron-down float-end"></i></h5>
+            </div>
+            <div id="network-detail" class="collapse show">
+                <div class="card-body" id="network-info">
+                    <p class="text-muted">Loading...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6 mb-3">
+        <div class="card h-100">
+            <div class="card-header" data-bs-toggle="collapse" data-bs-target="#hardware-detail" style="cursor:pointer;">
+                <h5 class="mb-0"><i class="bi bi-motherboard"></i> Hardware & Storage <i class="bi bi-chevron-down float-end"></i></h5>
+            </div>
+            <div id="hardware-detail" class="collapse show">
+                <div class="card-body" id="hardware-info">
+                    <p class="text-muted">Loading...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- USB Printers -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header" data-bs-toggle="collapse" data-bs-target="#usb-detail" style="cursor:pointer;">
+                <h5 class="mb-0"><i class="bi bi-usb-symbol"></i> USB Devices <i class="bi bi-chevron-down float-end"></i></h5>
+            </div>
+            <div id="usb-detail" class="collapse show">
+                <div class="card-body" id="usb-info">
+                    <p class="text-muted">Loading...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Log Viewer -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                    <h5 class="mb-0"><i class="bi bi-terminal"></i> Log Viewer</h5>
+                    <div class="d-flex gap-2 flex-wrap">
+                        <select class="form-select form-select-sm" id="log-service" style="width: auto;" onchange="loadLogs()">
+                            <option value="printserver-web">Web Service</option>
+                            <option value="cups">CUPS (journald)</option>
+                            <option value="cups-error">CUPS Error Log</option>
+                            <option value="avahi-daemon">Avahi</option>
+                            <option value="app">Application (In-Memory)</option>
+                        </select>
+                        <select class="form-select form-select-sm" id="log-level" style="width: auto;" onchange="filterLogDisplay()">
+                            <option value="all">All Levels</option>
+                            <option value="error">Errors Only</option>
+                            <option value="warning">Warnings+</option>
+                            <option value="info">Info+</option>
+                        </select>
+                        <input type="text" class="form-control form-control-sm" id="log-search" placeholder="Search..." style="width: 150px;" oninput="filterLogDisplay()">
+                        <select class="form-select form-select-sm" id="log-lines" style="width: auto;" onchange="loadLogs()">
+                            <option value="50">50 lines</option>
+                            <option value="100" selected>100 lines</option>
+                            <option value="200">200 lines</option>
+                            <option value="500">500 lines</option>
+                        </select>
+                        <button class="btn btn-sm btn-outline-primary" onclick="loadLogs()">
+                            <i class="bi bi-arrow-clockwise"></i>
+                        </button>
+                    </div>
+                </div>
+                <small class="text-muted" id="log-count"></small>
+            </div>
+            <div class="card-body p-0">
+                <pre id="log-output" class="mb-0 p-3" style="max-height: 400px; overflow-y: auto; background: #1e1e1e; color: #d4d4d4; font-size: 0.8rem; white-space: pre-wrap; word-break: break-all;">Loading logs...</pre>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Service name to systemd unit mapping for restart
+    const SERVICE_UNIT_MAP = { cups: 'cups', avahi: 'avahi-daemon', printserver: 'printserver-web' };
+
+    // Raw log data stored for client-side filtering
+    let rawLogEntries = [];
+    let currentLogService = 'printserver-web';
+
+    function setBadge(id, text, cls) {
+        const el = document.getElementById(id);
+        if (el) { el.textContent = text; el.className = 'badge ' + cls; }
+    }
+
+    async function refreshDiagnostics() {
+        const btn = document.getElementById('refreshDiagBtn');
+        if (btn) { btn.disabled = true; btn.classList.add('btn-refreshing'); }
+
+        try {
+            const resp = await fetch('/api/diagnostics', { signal: AbortSignal.timeout(15000) });
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const data = await resp.json();
+            renderDiagnostics(data);
+        } catch (e) {
+            console.error('Diagnostics fetch failed:', e);
+            showToast('Failed to load diagnostics', 'error');
+        } finally {
+            if (btn) { btn.disabled = false; btn.classList.remove('btn-refreshing'); }
+        }
+
+        // Also load printers for test page feature
+        await loadPrinters();
+        await loadLogs();
+    }
+
+    function renderDiagnostics(d) {
+        // CUPS card
+        const cupsOk = d.services?.cups?.active && d.cups_connection?.scheduler_running;
+        setBadge('badge-cups', cupsOk ? 'Healthy' : (d.services?.cups?.active ? 'Degraded' : 'Down'),
+                 cupsOk ? 'bg-success' : (d.services?.cups?.active ? 'bg-warning text-dark' : 'bg-danger'));
+
+        // Avahi card
+        const avahiOk = d.services?.avahi?.active;
+        setBadge('badge-avahi', avahiOk ? 'Healthy' : 'Down', avahiOk ? 'bg-success' : 'bg-danger');
+
+        // Network card
+        const netOk = d.network?.wifi_connected || (d.network?.ip_address && d.network.ip_address !== '127.0.0.1');
+        setBadge('badge-network', netOk ? 'Connected' : 'Disconnected', netOk ? 'bg-success' : 'bg-danger');
+
+        // Hardware card
+        const temp = d.temperature_c;
+        const memPct = d.memory?.used_percent || 0;
+        let hwStatus = 'OK', hwCls = 'bg-success';
+        if (temp && temp > 80) { hwStatus = 'Hot!'; hwCls = 'bg-danger'; }
+        else if (temp && temp > 70) { hwStatus = 'Warm'; hwCls = 'bg-warning text-dark'; }
+        else if (memPct > 90) { hwStatus = 'Low Memory'; hwCls = 'bg-warning text-dark'; }
+        setBadge('badge-hardware', hwStatus, hwCls);
+
+        // Services table with restart buttons
+        const svcTbody = document.querySelector('#services-table tbody');
+        if (svcTbody && d.services) {
+            const rows = Object.entries(d.services).map(([name, svc]) => {
+                const unit = SERVICE_UNIT_MAP[name] || name;
+                return `
+                <tr>
+                    <td><strong>${escapeHtml(name)}</strong></td>
+                    <td><span class="badge ${svc.active ? 'bg-success' : 'bg-danger'}">${escapeHtml(svc.state)}</span></td>
+                    <td>${escapeHtml(svc.sub_state || '-')}</td>
+                    <td><small>${escapeHtml(svc.since || '-')}</small></td>
+                    <td>
+                        <button class="btn btn-sm btn-outline-warning" onclick="restartService('${escapeHtml(unit)}')" title="Restart ${escapeHtml(name)}">
+                            <i class="bi bi-arrow-repeat"></i> Restart
+                        </button>
+                    </td>
+                </tr>
+                `;
+            }).join('');
+            svcTbody.innerHTML = rows;
+        }
+
+        // Network info
+        const netEl = document.getElementById('network-info');
+        if (netEl && d.network) {
+            netEl.innerHTML = `
+                <dl class="row mb-0">
+                    <dt class="col-sm-5">IP Address</dt><dd class="col-sm-7"><code>${escapeHtml(d.network.ip_address)}</code></dd>
+                    <dt class="col-sm-5">Hostname</dt><dd class="col-sm-7"><code>${escapeHtml(d.network.hostname)}</code></dd>
+                    <dt class="col-sm-5">WiFi</dt><dd class="col-sm-7">${d.network.wifi_connected ? '<span class="badge bg-success">Connected</span> ' + escapeHtml(d.network.wifi_ssid || '') : '<span class="badge bg-danger">Disconnected</span>'}</dd>
+                    <dt class="col-sm-5">Gateway</dt><dd class="col-sm-7">${escapeHtml(d.network.gateway || 'N/A')} ${d.network.gateway_reachable ? '<span class="badge bg-success">Reachable</span>' : '<span class="badge bg-danger">Unreachable</span>'}</dd>
+                </dl>
+            `;
+        }
+
+        // Hardware info
+        const hwEl = document.getElementById('hardware-info');
+        if (hwEl) {
+            let html = '<dl class="row mb-0">';
+            if (d.temperature_c !== null && d.temperature_c !== undefined) {
+                const tempCls = d.temperature_c > 80 ? 'text-danger' : (d.temperature_c > 70 ? 'text-warning' : 'text-success');
+                html += `<dt class="col-sm-5">Temperature</dt><dd class="col-sm-7"><span class="${tempCls}">${d.temperature_c}&deg;C</span></dd>`;
+            }
+            if (d.memory) {
+                html += `<dt class="col-sm-5">Memory</dt><dd class="col-sm-7">${d.memory.available_mb}MB free / ${d.memory.total_mb}MB total (${d.memory.used_percent}% used)</dd>`;
+            }
+            if (d.storage) {
+                for (const [mount, info] of Object.entries(d.storage)) {
+                    html += `<dt class="col-sm-5">Disk (${escapeHtml(mount)})</dt><dd class="col-sm-7">${info.available_mb}MB free / ${info.total_mb}MB total (${escapeHtml(info.used_percent)} used)</dd>`;
+                }
+            }
+            html += '</dl>';
+            hwEl.innerHTML = html;
+        }
+
+        // USB printers
+        const usbEl = document.getElementById('usb-info');
+        if (usbEl) {
+            if (d.usb_printers && d.usb_printers.length > 0) {
+                usbEl.innerHTML = '<ul class="list-group list-group-flush">' +
+                    d.usb_printers.map(p => `<li class="list-group-item"><i class="bi bi-usb-plug"></i> ${escapeHtml(p)}</li>`).join('') +
+                    '</ul>';
+            } else {
+                usbEl.innerHTML = '<p class="text-muted mb-0"><i class="bi bi-info-circle"></i> No USB printer devices detected.</p>';
+            }
+        }
+
+        // AirPrint discovery
+        const airprintEl = document.getElementById('airprint-info');
+        if (airprintEl) {
+            const services = d.airprint_services || [];
+            if (services.length > 0) {
+                airprintEl.innerHTML =
+                    '<p class="mb-2"><span class="badge bg-success">Advertising</span> ' + services.length + ' service(s) on the network</p>' +
+                    '<ul class="list-group list-group-flush">' +
+                    services.map(s => `<li class="list-group-item py-1"><i class="bi bi-broadcast-pin"></i> ${escapeHtml(s)}</li>`).join('') +
+                    '</ul>';
+            } else {
+                airprintEl.innerHTML = '<p class="text-muted mb-0"><span class="badge bg-danger">Not Advertising</span> No AirPrint services found. iPhones/iPads will not see this printer.</p>';
+            }
+        }
+    }
+
+    async function loadPrinters() {
+        const el = document.getElementById('printers-info');
+        if (!el) return;
+
+        try {
+            const resp = await fetch('/api/printers', { signal: AbortSignal.timeout(10000) });
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const printers = await resp.json();
+
+            if (printers.error) {
+                el.innerHTML = '<p class="text-danger mb-0"><i class="bi bi-exclamation-triangle"></i> Cannot load printers: ' + escapeHtml(printers.error) + '</p>';
+                return;
+            }
+
+            if (printers.length === 0) {
+                el.innerHTML = '<p class="text-muted mb-0"><i class="bi bi-info-circle"></i> No printers configured.</p>';
+                return;
+            }
+
+            el.innerHTML = `
+                <table class="table table-sm mb-0">
+                    <thead><tr><th>Printer</th><th>Status</th><th>Actions</th></tr></thead>
+                    <tbody>
+                        ${printers.map(p => `
+                        <tr>
+                            <td><strong>${escapeHtml(p.name)}</strong><br><small class="text-muted">${escapeHtml(p.uri || '')}</small></td>
+                            <td><span class="badge ${p.status === 'idle' ? 'bg-success' : (p.status === 'printing' ? 'bg-primary' : 'bg-danger')}">${escapeHtml(p.status)}</span></td>
+                            <td>
+                                <button class="btn btn-sm btn-outline-primary" onclick="printTestPage('${escapeHtml(p.name)}')" title="Print a test page">
+                                    <i class="bi bi-file-earmark-text"></i> Test Page
+                                </button>
+                            </td>
+                        </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            `;
+        } catch (e) {
+            el.innerHTML = '<p class="text-danger mb-0"><i class="bi bi-exclamation-triangle"></i> Failed to load printers.</p>';
+        }
+    }
+
+    async function printTestPage(printerName) {
+        if (!confirm(`Print a test page on "${printerName}"?`)) return;
+
+        try {
+            const resp = await fetch(`/api/printers/${encodeURIComponent(printerName)}/test-page`, {
+                method: 'POST',
+                signal: AbortSignal.timeout(15000),
+            });
+            const data = await resp.json();
+            if (resp.ok && data.success) {
+                showToast(`Test page sent to ${printerName} (Job #${data.job_id})`, 'success');
+            } else {
+                showToast(data.error || 'Failed to print test page', 'error');
+            }
+        } catch (e) {
+            showToast('Failed to print test page: ' + e.message, 'error');
+        }
+    }
+
+    async function restartService(serviceName) {
+        if (!confirm(`Restart "${serviceName}"? The service will be briefly unavailable.`)) return;
+
+        try {
+            const resp = await fetch(`/api/system/services/${encodeURIComponent(serviceName)}/restart`, {
+                method: 'POST',
+                signal: AbortSignal.timeout(30000),
+            });
+            const data = await resp.json();
+            if (resp.ok && data.success) {
+                showToast(`${serviceName} restarted successfully`, 'success');
+                // Refresh diagnostics after a short delay to let the service start
+                setTimeout(refreshDiagnostics, 3000);
+            } else {
+                showToast(data.error || `Failed to restart ${serviceName}`, 'error');
+            }
+        } catch (e) {
+            showToast('Failed to restart service: ' + e.message, 'error');
+        }
+    }
+
+    async function loadLogs() {
+        const service = document.getElementById('log-service')?.value || 'printserver-web';
+        const lines = document.getElementById('log-lines')?.value || '100';
+        const output = document.getElementById('log-output');
+        if (!output) return;
+
+        currentLogService = service;
+        output.textContent = 'Loading logs...';
+
+        try {
+            const resp = await fetch(`/api/logs?service=${encodeURIComponent(service)}&lines=${lines}`, {
+                signal: AbortSignal.timeout(10000),
+            });
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const data = await resp.json();
+
+            if (data.entries && data.entries.length > 0) {
+                rawLogEntries = data.entries;
+            } else {
+                rawLogEntries = [];
+            }
+
+            filterLogDisplay();
+        } catch (e) {
+            output.textContent = `Error loading logs: ${e.message}`;
+            rawLogEntries = [];
+            updateLogCount(0, 0);
+        }
+    }
+
+    function filterLogDisplay() {
+        const output = document.getElementById('log-output');
+        if (!output) return;
+
+        const levelFilter = document.getElementById('log-level')?.value || 'all';
+        const searchText = (document.getElementById('log-search')?.value || '').toLowerCase();
+
+        if (rawLogEntries.length === 0) {
+            output.textContent = 'No log entries found.';
+            updateLogCount(0, 0);
+            return;
+        }
+
+        let filtered;
+        if (currentLogService === 'app') {
+            // In-memory app logs are objects with level field
+            filtered = rawLogEntries.filter(e => {
+                if (levelFilter !== 'all') {
+                    const lvl = (e.level || '').toLowerCase();
+                    if (levelFilter === 'error' && lvl !== 'error' && lvl !== 'critical') return false;
+                    if (levelFilter === 'warning' && !['error', 'critical', 'warning'].includes(lvl)) return false;
+                    if (levelFilter === 'info' && !['error', 'critical', 'warning', 'info'].includes(lvl)) return false;
+                }
+                if (searchText) {
+                    const text = `${e.timestamp} ${e.level} ${e.logger} ${e.message}`.toLowerCase();
+                    if (!text.includes(searchText)) return false;
+                }
+                return true;
+            });
+            output.textContent = filtered.map(e =>
+                `${e.timestamp} [${e.level}] ${e.logger}: ${e.message}`
+            ).join('\n') || 'No matching entries.';
+        } else {
+            // journald/file logs are plain strings
+            filtered = rawLogEntries.filter(line => {
+                const lower = line.toLowerCase();
+                if (levelFilter !== 'all') {
+                    if (levelFilter === 'error' && !lower.includes('error') && !lower.includes('crit') && !lower.includes('fatal')) return false;
+                    if (levelFilter === 'warning' && !lower.includes('error') && !lower.includes('crit') && !lower.includes('fatal') && !lower.includes('warn')) return false;
+                    if (levelFilter === 'info' && !lower.includes('error') && !lower.includes('crit') && !lower.includes('fatal') && !lower.includes('warn') && !lower.includes('info')) return false;
+                }
+                if (searchText && !lower.includes(searchText)) return false;
+                return true;
+            });
+            output.textContent = filtered.join('\n') || 'No matching entries.';
+        }
+
+        updateLogCount(filtered.length, rawLogEntries.length);
+        output.scrollTop = output.scrollHeight;
+    }
+
+    function updateLogCount(shown, total) {
+        const el = document.getElementById('log-count');
+        if (el) {
+            if (shown === total) {
+                el.textContent = `${total} entries`;
+            } else {
+                el.textContent = `Showing ${shown} of ${total} entries`;
+            }
+        }
+    }
+
+    // Load on page init
+    document.addEventListener('DOMContentLoaded', function() {
+        refreshDiagnostics();
+    });
+</script>
+{% endblock %}

@@ -9,6 +9,26 @@
     </div>
 </div>
 
+<!-- CUPS Error Banner -->
+{% if cups_error %}
+<div class="alert alert-danger alert-dismissible fade show" role="alert" id="cups-error-banner">
+    <i class="bi bi-exclamation-triangle-fill"></i>
+    <strong>CUPS service is unavailable.</strong> Printers and jobs cannot be displayed.
+    {% if error_message %}
+    <br><small class="text-muted">{{ error_message }}</small>
+    {% endif %}
+    <a href="/diagnostics" class="alert-link ms-2">View diagnostics</a>
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% else %}
+<div class="alert alert-danger alert-dismissible fade show" role="alert" id="cups-error-banner" style="display: none;">
+    <i class="bi bi-exclamation-triangle-fill"></i>
+    <strong>CUPS service is unavailable.</strong> Printers and jobs cannot be displayed.
+    <a href="/diagnostics" class="alert-link ms-2">View diagnostics</a>
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
 <!-- Server Status Cards -->
 <div class="row mb-4">
     <div class="col-md-4 col-sm-6 mb-3">
@@ -76,7 +96,13 @@
     </div>
 </div>
 
-{% if printers %}
+{% if cups_error %}
+<div class="alert alert-warning">
+    <i class="bi bi-exclamation-triangle"></i>
+    Cannot connect to print service. Check the
+    <a href="/diagnostics" class="alert-link">diagnostics page</a> for details.
+</div>
+{% elif printers %}
 <div class="row" id="printers-list">
     {% for printer in printers %}
     <div class="col-md-6 col-lg-4 mb-3">
@@ -122,8 +148,10 @@
     {% endfor %}
 </div>
 {% else %}
-<div class="alert alert-warning">
-    <i class="bi bi-exclamation-triangle"></i> No printers found. Make sure your printer is connected via USB.
+<div class="alert alert-info">
+    <i class="bi bi-info-circle"></i>
+    No printers configured. Connect a USB printer and add it via
+    <a href="http://{{ server_status.ip_address }}:631/admin" target="_blank" class="alert-link">CUPS Administration</a>.
 </div>
 {% endif %}
 
@@ -191,11 +219,4 @@
         </div>
     </div>
 </div>
-{% endblock %}
-
-{% block scripts %}
-<script>
-    // Auto-refresh status every 30 seconds
-    setInterval(refreshStatus, 30000);
-</script>
 {% endblock %}

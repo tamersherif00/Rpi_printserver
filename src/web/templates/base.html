@@ -13,6 +13,9 @@
         <div class="container">
             <a class="navbar-brand" href="/">
                 <i class="bi bi-printer"></i> Print Server
+                <span id="connection-status" class="badge bg-success ms-2" title="Connected">
+                    <i class="bi bi-circle-fill" style="font-size: 0.5rem;"></i>
+                </span>
             </a>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
                 <span class="navbar-toggler-icon"></span>
@@ -27,6 +30,11 @@
                     <li class="nav-item">
                         <a class="nav-link {% if request.endpoint == 'queue' %}active{% endif %}" href="/queue">
                             <i class="bi bi-list-task"></i> Print Queue
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'diagnostics' %}active{% endif %}" href="/diagnostics">
+                            <i class="bi bi-wrench"></i> Diagnostics
                         </a>
                     </li>
                     <li class="nav-item">
@@ -49,6 +57,11 @@
     <main class="container mt-4">
         {% block content %}{% endblock %}
     </main>
+
+    <!-- Toast Container -->
+    <div class="position-fixed bottom-0 end-0 p-3" style="z-index: 11">
+        <div id="toast-container"></div>
+    </div>
 
     <footer class="container mt-5 mb-3 text-center text-muted">
         <small>Raspberry Pi Print Server</small>

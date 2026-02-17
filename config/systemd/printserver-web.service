@@ -1,9 +1,9 @@
 [Unit]
 Description=WiFi Print Server Web Interface
 Documentation=https://github.com/your-repo/rpi-printserver
-After=network.target cups.service avahi-daemon.service
-Wants=cups.service avahi-daemon.service
-Requires=network.target
+After=network-online.target cups.service avahi-daemon.service
+Wants=network-online.target avahi-daemon.service
+Requires=cups.service
 
 [Service]
 Type=simple
@@ -13,12 +13,17 @@ WorkingDirectory=/opt/printserver
 Environment=FLASK_ENV=production
 Environment=PYTHONPATH=/opt/printserver
 Environment=PRINTSERVER_CONFIG=/etc/printserver/config.ini
+
+# Wait for CUPS to be ready before starting (up to 20s, then start anyway)
+ExecStartPre=/bin/sh -c 'for i in 1 2 3 4 5 6 7 8 9 10; do lpstat -r 2>/dev/null && exit 0; sleep 2; done; echo "CUPS not ready after 20s, starting anyway"; exit 0'
 ExecStart=/usr/bin/python3 -c "from web.app import create_app; app = create_app(); app.run(host='0.0.0.0', port=5000)"
 ExecReload=/bin/kill -HUP $MAINPID
 
 # Restart configuration
 Restart=always
 RestartSec=5
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 # Security hardening
 NoNewPrivileges=true

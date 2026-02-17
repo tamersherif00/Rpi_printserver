@@ -162,19 +162,22 @@ install_python_app() {
     mkdir -p "$INSTALL_DIR/scripts"
     cp "$SCRIPT_DIR/set-hostname.sh" "$INSTALL_DIR/scripts/"
     chmod +x "$INSTALL_DIR/scripts/set-hostname.sh"
+    cp "$SCRIPT_DIR/restart-service.sh" "$INSTALL_DIR/scripts/"
+    chmod +x "$INSTALL_DIR/scripts/restart-service.sh"
 
     log_info "Python application installed"
 }
 
 configure_sudoers() {
-    log_info "Configuring sudoers for hostname changes..."
+    log_info "Configuring sudoers for system management..."
 
     # Create sudoers entry to allow the web service to change hostname
     SUDOERS_FILE="/etc/sudoers.d/printserver"
 
     cat > "$SUDOERS_FILE" << 'EOF'
-# Allow printserver web service to change hostname without password
+# Allow printserver web service to manage system without password
 ALL ALL=(root) NOPASSWD: /opt/printserver/scripts/set-hostname.sh
+ALL ALL=(root) NOPASSWD: /opt/printserver/scripts/restart-service.sh
 EOF
 
     chmod 440 "$SUDOERS_FILE"
@@ -235,12 +238,44 @@ install_systemd_service() {
     log_info "Systemd services configured"
 }
 
+wait_for_cups() {
+    # Poll for CUPS scheduler readiness
+    local max_attempts=${1:-10}
+    local delay=${2:-2}
+    local attempt=1
+
+    while [[ $attempt -le $max_attempts ]]; do
+        if lpstat -r 2>/dev/null | grep -q "scheduler is running"; then
+            log_info "CUPS scheduler is ready (attempt $attempt)"
+            return 0
+        fi
+        log_info "Waiting for CUPS scheduler (attempt $attempt/$max_attempts)..."
+        sleep "$delay"
+        ((attempt++))
+    done
+
+    log_warn "CUPS scheduler not confirmed ready after $max_attempts attempts"
+    return 1
+}
+
 start_services() {
     log_info "Starting services..."
 
     systemctl start cups
+
+    # Wait for CUPS to actually be ready before starting dependent services
+    wait_for_cups 10 2
+
     systemctl start avahi-daemon
     systemctl start printserver-web
+
+    # Verify with health check
+    sleep 3
+    if curl -s -o /dev/null -w "%{http_code}" http://localhost:5000/health 2>/dev/null | grep -q "200"; then
+        log_info "Web interface is healthy"
+    else
+        log_warn "Web interface may still be starting. Check: systemctl status printserver-web"
+    fi
 
     log_info "Services started"
 }
@@ -248,9 +283,9 @@ start_services() {
 restart_services() {
     log_info "Restarting services to apply updates..."
 
-    # Restart CUPS to apply configuration changes
+    # Restart CUPS and wait for it to be ready
     systemctl restart cups
-    sleep 1
+    wait_for_cups 10 2
 
     # Restart Avahi to apply AirPrint changes
     systemctl restart avahi-daemon
@@ -258,7 +293,7 @@ restart_services() {
 
     # Restart web interface to apply code updates
     systemctl restart printserver-web
-    sleep 1
+    sleep 2
 
     # Verify all services are running
     if systemctl is-active --quiet cups && \
@@ -269,43 +304,59 @@ restart_services() {
         log_warn "Some services may not have started correctly. Check status with:"
         log_warn "  systemctl status cups avahi-daemon printserver-web"
     fi
+
+    # Verify web interface health
+    if curl -s -o /dev/null -w "%{http_code}" http://localhost:5000/health 2>/dev/null | grep -q "200"; then
+        log_info "Web interface health check passed"
+    else
+        log_warn "Web interface health check failed - it may still be starting"
+    fi
 }
 
 detect_printer() {
     log_info "Detecting USB printers..."
 
-    # Wait for CUPS to be ready
-    sleep 2
+    local max_attempts=5
+    local delay=3
+    local attempt=1
 
-    # Check for USB printers
-    if lpinfo -v 2>/dev/null | grep -q "usb://"; then
-        PRINTER_URI=$(lpinfo -v 2>/dev/null | grep "usb://" | head -1 | awk '{print $2}')
-        log_info "Found USB printer: $PRINTER_URI"
+    # Retry loop: printer USB interface may take time to initialize
+    while [[ $attempt -le $max_attempts ]]; do
+        if lpinfo -v 2>/dev/null | grep -q "usb://"; then
+            PRINTER_URI=$(lpinfo -v 2>/dev/null | grep "usb://" | head -1 | awk '{print $2}')
+            log_info "Found USB printer: $PRINTER_URI (attempt $attempt)"
 
-        # Extract printer name from URI
-        PRINTER_NAME=$(echo "$PRINTER_URI" | sed 's|usb://||' | tr '/' '_' | tr ' ' '_')
+            # Extract printer name from URI
+            PRINTER_NAME=$(echo "$PRINTER_URI" | sed 's|usb://||' | tr '/' '_' | tr ' ' '_')
 
-        # Add printer to CUPS
-        if ! lpstat -p "$PRINTER_NAME" > /dev/null 2>&1; then
-            log_info "Adding printer '$PRINTER_NAME' to CUPS..."
-            lpadmin -p "$PRINTER_NAME" -E -v "$PRINTER_URI" -m everywhere
-            lpadmin -d "$PRINTER_NAME"  # Set as default
-            log_info "Printer added and set as default"
-        else
-            log_info "Printer '$PRINTER_NAME' already configured"
+            # Add printer to CUPS
+            if ! lpstat -p "$PRINTER_NAME" > /dev/null 2>&1; then
+                log_info "Adding printer '$PRINTER_NAME' to CUPS..."
+                lpadmin -p "$PRINTER_NAME" -E -v "$PRINTER_URI" -m everywhere
+                lpadmin -d "$PRINTER_NAME"  # Set as default
+                log_info "Printer added and set as default"
+            else
+                log_info "Printer '$PRINTER_NAME' already configured"
+            fi
+
+            # Enable printer and set to accept jobs
+            log_info "Configuring printer to accept jobs..."
+            cupsenable "$PRINTER_NAME" 2>/dev/null || true
+            cupsaccept "$PRINTER_NAME" 2>/dev/null || true
+            log_info "Printer configured and ready"
+            return 0
         fi
 
-        # Enable printer and set to accept jobs
-        log_info "Configuring printer to accept jobs..."
-        cupsenable "$PRINTER_NAME" 2>/dev/null || true
-        cupsaccept "$PRINTER_NAME" 2>/dev/null || true
-        log_info "Printer configured and ready"
-    else
-        log_warn "No USB printer detected. Please connect your printer and run:"
-        log_warn "  sudo lpinfo -v  # to list available printers"
-        log_warn "  sudo lpadmin -p PrinterName -E -v usb://... -m everywhere"
-        log_warn "  sudo cupsenable PrinterName && sudo cupsaccept PrinterName"
-    fi
+        log_info "No USB printer found (attempt $attempt/$max_attempts), waiting ${delay}s..."
+        sleep "$delay"
+        ((attempt++))
+    done
+
+    log_warn "No USB printer detected after $max_attempts attempts."
+    log_warn "Connect your printer and run:"
+    log_warn "  sudo lpinfo -v  # to list available printers"
+    log_warn "  sudo lpadmin -p PrinterName -E -v usb://... -m everywhere"
+    log_warn "  sudo cupsenable PrinterName && sudo cupsaccept PrinterName"
 }
 
 enable_all_printers() {

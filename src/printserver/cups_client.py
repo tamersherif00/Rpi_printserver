@@ -1,6 +1,7 @@
 """CUPS client wrapper for printer communication."""
 
 import logging
+import time
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -18,6 +19,9 @@ JOB_STATE_CANCELED = 7
 JOB_STATE_ABORTED = 8
 JOB_STATE_COMPLETED = 9
 
+# Connection staleness threshold (seconds)
+MAX_CONNECTION_AGE = 300
+
 
 class CupsClientError(Exception):
     """Exception raised for CUPS client errors."""
@@ -26,7 +30,7 @@ class CupsClientError(Exception):
 
 
 class CupsClient:
-    """Wrapper for CUPS connection and operations."""
+    """Wrapper for CUPS connection and operations with retry and self-healing."""
 
     def __init__(self, host: str = "localhost", port: int = 631):
         """Initialize CUPS client.
@@ -38,9 +42,10 @@ class CupsClient:
         self.host = host
         self.port = port
         self._connection: Optional[Any] = None
+        self._connected_at: float = 0.0
 
     def connect(self) -> None:
-        """Establish connection to CUPS server.
+        """Establish connection to CUPS server (single attempt).
 
         Raises:
             CupsClientError: If connection fails.
@@ -49,6 +54,7 @@ class CupsClient:
             import cups
 
             self._connection = cups.Connection(host=self.host)
+            self._connected_at = time.monotonic()
             logger.info(f"Connected to CUPS at {self.host}:{self.port}")
         except ImportError:
             logger.warning("pycups not available, using mock connection")
@@ -57,10 +63,97 @@ class CupsClient:
             logger.error(f"Failed to connect to CUPS: {e}")
             raise CupsClientError(f"Failed to connect to CUPS: {e}") from e
 
+    def connect_with_retry(
+        self,
+        max_retries: int = 3,
+        base_delay: float = 1.0,
+        max_delay: float = 10.0,
+    ) -> None:
+        """Connect to CUPS with exponential backoff retry.
+
+        Args:
+            max_retries: Maximum number of retry attempts after first failure.
+            base_delay: Initial delay between retries in seconds.
+            max_delay: Maximum delay between retries in seconds.
+
+        Raises:
+            CupsClientError: If all connection attempts fail.
+        """
+        last_error = None
+        for attempt in range(max_retries + 1):
+            try:
+                import cups
+
+                self._connection = cups.Connection(host=self.host)
+                self._connected_at = time.monotonic()
+                if attempt > 0:
+                    logger.info(
+                        f"Connected to CUPS at {self.host}:{self.port} "
+                        f"(after {attempt + 1} attempts)"
+                    )
+                else:
+                    logger.info(f"Connected to CUPS at {self.host}:{self.port}")
+                return
+            except ImportError:
+                logger.warning("pycups not available, using mock connection")
+                self._connection = None
+                return
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries:
+                    delay = min(base_delay * (2 ** attempt), max_delay)
+                    logger.warning(
+                        f"CUPS connection attempt {attempt + 1}/{max_retries + 1} "
+                        f"failed: {e}. Retrying in {delay:.1f}s"
+                    )
+                    time.sleep(delay)
+
+        logger.error(
+            f"Failed to connect to CUPS after {max_retries + 1} attempts: {last_error}"
+        )
+        raise CupsClientError(
+            f"Failed to connect to CUPS after {max_retries + 1} attempts: {last_error}"
+        ) from last_error
+
+    def ensure_connected(self) -> None:
+        """Ensure a healthy CUPS connection exists, reconnecting if needed.
+
+        Reuses existing connections when healthy. Detects stale or dead
+        connections and auto-reconnects with retry.
+
+        Raises:
+            CupsClientError: If connection cannot be established.
+        """
+        if self._connection is not None and not self.is_stale:
+            try:
+                self._connection.getServer()
+                return
+            except Exception:
+                logger.warning("CUPS connection is dead, reconnecting")
+                self._connection = None
+
+        if self._connection is not None and self.is_stale:
+            logger.info("CUPS connection is stale, reconnecting")
+            self._connection = None
+
+        self.connect_with_retry()
+
     def disconnect(self) -> None:
         """Close CUPS connection."""
         self._connection = None
+        self._connected_at = 0.0
         logger.info("Disconnected from CUPS")
+
+    @property
+    def is_stale(self) -> bool:
+        """Check if the connection has exceeded its maximum age.
+
+        Returns:
+            True if the connection is older than MAX_CONNECTION_AGE.
+        """
+        if self._connected_at == 0.0:
+            return True
+        return (time.monotonic() - self._connected_at) > MAX_CONNECTION_AGE
 
     @property
     def connection(self) -> Any:
@@ -94,8 +187,11 @@ class CupsClient:
         Raises:
             CupsClientError: If operation fails.
         """
+        self.ensure_connected()
         try:
             return self.connection.getPrinters()
+        except CupsClientError:
+            raise
         except Exception as e:
             logger.error(f"Failed to get printers: {e}")
             raise CupsClientError(f"Failed to get printers: {e}") from e
@@ -112,8 +208,11 @@ class CupsClient:
         Raises:
             CupsClientError: If operation fails.
         """
+        self.ensure_connected()
         try:
             return self.connection.getPrinterAttributes(printer_name)
+        except CupsClientError:
+            raise
         except Exception as e:
             logger.error(f"Failed to get printer attributes: {e}")
             raise CupsClientError(f"Failed to get printer attributes: {e}") from e
@@ -139,25 +238,25 @@ class CupsClient:
         Raises:
             CupsClientError: If operation fails.
         """
+        self.ensure_connected()
         try:
-            # Request all relevant attributes for better job information
             kwargs = {
                 "which_jobs": which_jobs,
                 "my_jobs": my_jobs,
             }
 
-            # Add requested attributes if specified
             if requested_attributes:
                 kwargs["requested_attributes"] = requested_attributes
 
             jobs = self.connection.getJobs(**kwargs)
 
-            # Log job data for debugging (only in development)
             if logger.isEnabledFor(logging.DEBUG):
                 for job_id, job_data in jobs.items():
                     logger.debug(f"Job {job_id} attributes: {job_data.keys()}")
 
             return jobs
+        except CupsClientError:
+            raise
         except Exception as e:
             logger.error(f"Failed to get jobs: {e}")
             raise CupsClientError(f"Failed to get jobs: {e}") from e
@@ -174,8 +273,11 @@ class CupsClient:
         Raises:
             CupsClientError: If operation fails.
         """
+        self.ensure_connected()
         try:
             return self.connection.getJobAttributes(job_id)
+        except CupsClientError:
+            raise
         except Exception as e:
             logger.error(f"Failed to get job attributes: {e}")
             raise CupsClientError(f"Failed to get job attributes: {e}") from e
@@ -192,13 +294,39 @@ class CupsClient:
         Raises:
             CupsClientError: If operation fails.
         """
+        self.ensure_connected()
         try:
             self.connection.cancelJob(job_id)
             logger.info(f"Canceled job {job_id}")
             return True
+        except CupsClientError:
+            raise
         except Exception as e:
             logger.error(f"Failed to cancel job {job_id}: {e}")
             raise CupsClientError(f"Failed to cancel job: {e}") from e
+
+    def print_test_page(self, printer_name: str) -> int:
+        """Print a CUPS test page on the specified printer.
+
+        Args:
+            printer_name: Name of the printer.
+
+        Returns:
+            CUPS job ID for the test page.
+
+        Raises:
+            CupsClientError: If operation fails.
+        """
+        self.ensure_connected()
+        try:
+            job_id = self.connection.printTestPage(printer_name)
+            logger.info(f"Printed test page on '{printer_name}' (job {job_id})")
+            return job_id
+        except CupsClientError:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to print test page on '{printer_name}': {e}")
+            raise CupsClientError(f"Failed to print test page: {e}") from e
 
     def get_default_printer(self) -> Optional[str]:
         """Get the default printer name.
@@ -209,8 +337,11 @@ class CupsClient:
         Raises:
             CupsClientError: If operation fails.
         """
+        self.ensure_connected()
         try:
             return self.connection.getDefault()
+        except CupsClientError:
+            raise
         except Exception as e:
             logger.error(f"Failed to get default printer: {e}")
             raise CupsClientError(f"Failed to get default printer: {e}") from e

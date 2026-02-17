@@ -1,12 +1,48 @@
 """Flask application factory for the print server web interface."""
 
+import collections
 import logging
 import os
+from datetime import datetime
+
 from flask import Flask
 
 from printserver.config import get_config, setup_logging
+from printserver.cups_client import CupsClient, CupsClientError
 
 logger = logging.getLogger(__name__)
+
+
+class RingBufferHandler(logging.Handler):
+    """Logging handler that stores entries in a fixed-size ring buffer.
+
+    Provides in-memory access to recent application logs from the web UI
+    without requiring journald or SSH access.
+    """
+
+    def __init__(self, capacity: int = 500):
+        super().__init__()
+        self._buffer: collections.deque[dict] = collections.deque(maxlen=capacity)
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self._buffer.append({
+            "timestamp": datetime.fromtimestamp(record.created).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": self.format(record),
+        })
+
+    def get_entries(self, count: int = 100) -> list[dict]:
+        """Get the most recent log entries.
+
+        Args:
+            count: Maximum number of entries to return.
+
+        Returns:
+            List of log entry dicts (most recent last).
+        """
+        entries = list(self._buffer)
+        return entries[-count:]
 
 
 def create_app(config_override: dict = None) -> Flask:
@@ -41,6 +77,37 @@ def create_app(config_override: dict = None) -> Flask:
 
     # Setup logging
     setup_logging(server_config.log_level)
+
+    # Attach in-memory log ring buffer for web-based log viewing
+    ring_handler = RingBufferHandler(capacity=500)
+    ring_handler.setFormatter(logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    ))
+    logging.getLogger("printserver").addHandler(ring_handler)
+    logging.getLogger("web").addHandler(ring_handler)
+    app._log_buffer = ring_handler
+
+    # Readiness flag - set after initial CUPS connection attempt
+    app._ready = False
+
+    # One-shot before_request hook to attempt initial CUPS connection
+    @app.before_request
+    def _startup_check():
+        if app._ready:
+            return None
+        app._ready = True
+        # Attempt initial CUPS connection (non-blocking for the request)
+        try:
+            client = CupsClient(
+                host=app.config.get("CUPS_HOST", "localhost"),
+                port=app.config.get("CUPS_PORT", 631),
+            )
+            client.connect_with_retry(max_retries=2, base_delay=1.0, max_delay=5.0)
+            app._cups_client = client
+            logger.info("Initial CUPS connection established")
+        except CupsClientError as e:
+            logger.warning(f"Initial CUPS connection failed (will retry on requests): {e}")
+        return None
 
     # Register routes
     from . import routes

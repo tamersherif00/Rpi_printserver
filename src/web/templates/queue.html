@@ -14,6 +14,26 @@
     </div>
 </div>
 
+<!-- CUPS Error Banner -->
+{% if cups_error %}
+<div class="alert alert-danger alert-dismissible fade show" role="alert" id="cups-error-banner">
+    <i class="bi bi-exclamation-triangle-fill"></i>
+    <strong>Cannot load print queue.</strong> CUPS service is unavailable.
+    {% if error_message %}
+    <br><small class="text-muted">{{ error_message }}</small>
+    {% endif %}
+    <a href="/diagnostics" class="alert-link ms-2">View diagnostics</a>
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% else %}
+<div class="alert alert-danger alert-dismissible fade show" role="alert" id="cups-error-banner" style="display: none;">
+    <i class="bi bi-exclamation-triangle-fill"></i>
+    <strong>Cannot load print queue.</strong> CUPS service is unavailable.
+    <a href="/diagnostics" class="alert-link ms-2">View diagnostics</a>
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
 <!-- Filter Controls -->
 <div class="row mb-3">
     <div class="col-auto">
@@ -131,11 +151,4 @@
         </div>
     </div>
 </div>
-{% endblock %}
-
-{% block scripts %}
-<script>
-    // Auto-refresh jobs every 10 seconds
-    setInterval(refreshJobs, 10000);
-</script>
 {% endblock %}

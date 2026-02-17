@@ -1,20 +1,85 @@
 /**
  * Print Server Web Interface JavaScript
+ * Includes connection monitoring, adaptive polling, and retry logic.
  */
+
+// --- Connection State ---
+let connectionOk = true;
+let retryCount = 0;
+const MAX_RETRIES = 3;
+const BASE_INTERVAL = 30000;  // 30s normal polling
+const FAST_INTERVAL = 5000;   // 5s when recovering
+const FETCH_TIMEOUT = 10000;  // 10s fetch timeout
+
+/**
+ * Set the connection status indicator in the navbar
+ */
+function setConnectionStatus(status) {
+    const el = document.getElementById('connection-status');
+    if (!el) return;
+
+    const wasOffline = !connectionOk;
+    connectionOk = status === 'connected';
+
+    const config = {
+        'connected':    { cls: 'bg-success', title: 'Connected', icon: 'bi-circle-fill' },
+        'reconnecting': { cls: 'bg-warning', title: 'Reconnecting...', icon: 'bi-arrow-repeat' },
+        'offline':      { cls: 'bg-danger',  title: 'Offline', icon: 'bi-circle-fill' },
+    };
+    const c = config[status] || config['offline'];
+
+    el.className = `badge ${c.cls} ms-2`;
+    el.title = c.title;
+    el.innerHTML = `<i class="${c.icon}" style="font-size: 0.5rem;"></i>`;
+
+    // Show recovery toast
+    if (connectionOk && wasOffline) {
+        showToast('Connection restored', 'success');
+    }
+
+    // Toggle CUPS error banner based on API response
+    updateCupsErrorBanner(status === 'offline');
+}
+
+/**
+ * Show/hide the CUPS error banner dynamically (for JS-polled updates)
+ */
+function updateCupsErrorBanner(show) {
+    const banner = document.getElementById('cups-error-banner');
+    if (banner) {
+        banner.style.display = show ? 'block' : 'none';
+    }
+}
 
 /**
  * Refresh server status and update dashboard
  */
 async function refreshStatus() {
     try {
-        const response = await fetch('/api/status');
-        if (!response.ok) throw new Error('Failed to fetch status');
+        const response = await fetch('/api/status', {
+            signal: AbortSignal.timeout(FETCH_TIMEOUT),
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
         const data = await response.json();
         updateDashboard(data);
+        setConnectionStatus('connected');
+        retryCount = 0;
+
+        // Check for CUPS degraded state
+        if (data.server && data.server.cups_error) {
+            updateCupsErrorBanner(true);
+        } else {
+            updateCupsErrorBanner(false);
+        }
     } catch (error) {
-        console.error('Error refreshing status:', error);
-        showToast('Failed to refresh status', 'error');
+        retryCount++;
+        if (retryCount >= MAX_RETRIES) {
+            setConnectionStatus('offline');
+        } else {
+            setConnectionStatus('reconnecting');
+        }
+        console.error('Status refresh failed:', error);
     }
 }
 
@@ -25,7 +90,6 @@ async function refreshDashboard() {
     const btn = document.getElementById('refreshBtn');
     if (!btn) return;
 
-    // Add loading state
     btn.disabled = true;
     btn.classList.add('btn-refreshing');
 
@@ -36,7 +100,6 @@ async function refreshDashboard() {
         console.error('Error refreshing dashboard:', error);
         showToast('Failed to refresh dashboard', 'error');
     } finally {
-        // Remove loading state
         btn.disabled = false;
         btn.classList.remove('btn-refreshing');
     }
@@ -46,17 +109,15 @@ async function refreshDashboard() {
  * Update dashboard with new status data
  */
 function updateDashboard(data) {
+    if (!data.server) return;
+
     // Update uptime
     const uptimeEl = document.getElementById('uptime');
-    if (uptimeEl && data.uptime !== undefined) {
-        const hours = Math.floor(data.uptime / 3600);
-        const minutes = Math.floor((data.uptime % 3600) / 60);
+    if (uptimeEl && data.server.uptime !== undefined) {
+        const hours = Math.floor(data.server.uptime / 3600);
+        const minutes = Math.floor((data.server.uptime % 3600) / 60);
         uptimeEl.textContent = `${hours}h ${minutes}m`;
     }
-
-    // Update WiFi status
-    // Note: Full dashboard update would require more DOM manipulation
-    // For now, we just refresh the page data
 }
 
 /**
@@ -66,15 +127,32 @@ async function refreshJobs() {
     const filter = document.getElementById('statusFilter')?.value || 'all';
 
     try {
-        const response = await fetch(`/api/jobs?status=${filter}`);
-        if (!response.ok) throw new Error('Failed to fetch jobs');
+        const response = await fetch(`/api/jobs?status=${filter}`, {
+            signal: AbortSignal.timeout(FETCH_TIMEOUT),
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
         const jobs = await response.json();
+
+        // Check for CUPS error in response
+        if (jobs.error && jobs.code === 'CUPS_ERROR') {
+            updateCupsErrorBanner(true);
+            return;
+        }
+
         updateJobsTable(jobs);
         updateJobStats(jobs);
+        updateCupsErrorBanner(false);
+        setConnectionStatus('connected');
+        retryCount = 0;
     } catch (error) {
+        retryCount++;
+        if (retryCount >= MAX_RETRIES) {
+            setConnectionStatus('offline');
+        } else {
+            setConnectionStatus('reconnecting');
+        }
         console.error('Error refreshing jobs:', error);
-        showToast('Failed to refresh jobs', 'error');
     }
 }
 
@@ -85,7 +163,6 @@ async function refreshJobsWithFeedback() {
     const btn = document.getElementById('refreshJobsBtn');
     if (!btn) return;
 
-    // Add loading state
     btn.disabled = true;
     btn.classList.add('btn-refreshing');
 
@@ -96,7 +173,6 @@ async function refreshJobsWithFeedback() {
         console.error('Error refreshing jobs:', error);
         showToast('Failed to refresh jobs', 'error');
     } finally {
-        // Remove loading state
         btn.disabled = false;
         btn.classList.remove('btn-refreshing');
     }
@@ -179,7 +255,8 @@ async function cancelJob(jobId) {
 
     try {
         const response = await fetch(`/api/jobs/${jobId}`, {
-            method: 'DELETE'
+            method: 'DELETE',
+            signal: AbortSignal.timeout(FETCH_TIMEOUT),
         });
 
         const data = await response.json();
@@ -257,7 +334,6 @@ function escapeHtml(text) {
  * Show a toast notification
  */
 function showToast(message, type = 'info') {
-    // Simple alert for now - could be replaced with proper toast library
     if (type === 'error') {
         console.error(message);
     } else {
@@ -282,7 +358,33 @@ function showToast(message, type = 'info') {
     }
 }
 
+// --- Adaptive Polling ---
+
+/**
+ * Start adaptive polling. Polls faster when disconnected to detect recovery quickly.
+ * Detects the current page and polls the appropriate endpoint.
+ */
+function startPolling() {
+    const isDashboard = !!document.getElementById('uptime');
+    const isQueue = !!document.getElementById('jobsTable');
+
+    async function poll() {
+        if (isDashboard) {
+            await refreshStatus();
+        } else if (isQueue) {
+            await refreshJobs();
+        }
+
+        const interval = connectionOk ? BASE_INTERVAL : FAST_INTERVAL;
+        setTimeout(poll, interval);
+    }
+
+    // Start first poll after a short delay
+    setTimeout(poll, connectionOk ? BASE_INTERVAL : FAST_INTERVAL);
+}
+
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', function() {
     console.log('Print Server Web Interface loaded');
+    startPolling();
 });

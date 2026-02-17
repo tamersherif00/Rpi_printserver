@@ -5,6 +5,7 @@ defined in specs/001-wifi-print-server/contracts/api.yaml
 """
 
 import json
+import sys
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
@@ -12,8 +13,29 @@ import pytest
 
 
 @pytest.fixture
-def app():
-    """Create test Flask application."""
+def mock_cups():
+    """Mock CUPS connection for testing.
+
+    Uses sys.modules patching because cups is imported locally
+    inside CupsClient methods (``import cups``).
+
+    Must be activated before the app fixture so the before_request
+    startup hook connects to the mock.
+    """
+    mock_mod = MagicMock()
+    mock_conn = MagicMock()
+    mock_mod.Connection.return_value = mock_conn
+    with patch.dict(sys.modules, {"cups": mock_mod}):
+        yield mock_conn
+
+
+@pytest.fixture
+def app(mock_cups):
+    """Create test Flask application.
+
+    Depends on mock_cups so the CUPS module is mocked before
+    the before_request startup hook fires on the first request.
+    """
     from web.app import create_app
 
     app = create_app({"TESTING": True})
@@ -24,15 +46,6 @@ def app():
 def client(app):
     """Create test client."""
     return app.test_client()
-
-
-@pytest.fixture
-def mock_cups():
-    """Mock CUPS connection for testing."""
-    with patch("printserver.cups_client.cups") as mock:
-        mock_conn = MagicMock()
-        mock.Connection.return_value = mock_conn
-        yield mock_conn
 
 
 class TestStatusEndpoint:
@@ -294,7 +307,7 @@ class TestHealthEndpoint:
         data = json.loads(response.data)
 
         assert "status" in data
-        assert data["status"] in ["healthy", "unhealthy", "degraded"]
+        assert data["status"] in ["healthy", "degraded", "starting"]
 
 
 class TestPageRoutes:
@@ -318,3 +331,123 @@ class TestPageRoutes:
 
         assert response.status_code == 200
         assert b"<!DOCTYPE html>" in response.data or b"<html" in response.data
+
+    def test_diagnostics_returns_200(self, client, mock_cups):
+        """Test diagnostics page returns 200."""
+        response = client.get("/diagnostics")
+
+        assert response.status_code == 200
+        assert b"Diagnostics" in response.data
+
+
+class TestPrintTestPageEndpoint:
+    """Contract tests for POST /api/printers/{name}/test-page."""
+
+    def test_print_test_page_success(self, client, mock_cups):
+        """Test printing a test page returns 200."""
+        mock_cups.getPrinters.return_value = {
+            "Brother": {
+                "device-uri": "usb://Brother/HL-L2350DW",
+                "printer-state": 3,
+                "printer-state-message": "Ready",
+                "printer-is-accepting-jobs": True,
+            }
+        }
+        mock_cups.printTestPage.return_value = 42
+
+        response = client.post("/api/printers/Brother/test-page")
+
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        assert data["success"] is True
+        assert data["job_id"] == 42
+
+    def test_print_test_page_printer_not_found(self, client, mock_cups):
+        """Test print test page returns 404 for unknown printer."""
+        mock_cups.getPrinters.return_value = {}
+
+        response = client.post("/api/printers/NonExistent/test-page")
+
+        assert response.status_code == 404
+
+
+class TestServiceRestartEndpoint:
+    """Contract tests for POST /api/system/services/{service}/restart."""
+
+    def test_restart_invalid_service(self, client, mock_cups):
+        """Test restart returns 400 for non-whitelisted service."""
+        response = client.post("/api/system/services/nginx/restart")
+
+        assert response.status_code == 400
+        data = json.loads(response.data)
+        assert data["code"] == "INVALID_SERVICE"
+
+    @patch("web.routes.subprocess.run")
+    def test_restart_success(self, mock_run, client, mock_cups):
+        """Test restart returns 200 on success."""
+        mock_run.return_value = MagicMock(returncode=0, stderr="")
+
+        response = client.post("/api/system/services/cups/restart")
+
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        assert data["success"] is True
+
+    @patch("web.routes.subprocess.run")
+    def test_restart_failure(self, mock_run, client, mock_cups):
+        """Test restart returns 500 on failure."""
+        mock_run.return_value = MagicMock(returncode=1, stderr="Permission denied")
+
+        response = client.post("/api/system/services/cups/restart")
+
+        assert response.status_code == 500
+
+
+class TestDiagnosticsExportEndpoint:
+    """Contract tests for GET /api/diagnostics/export."""
+
+    @patch("web.routes.subprocess.run")
+    def test_export_returns_json(self, mock_run, client, mock_cups):
+        """Test export returns downloadable JSON."""
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="", stderr=""
+        )
+        mock_cups.getPrinters.return_value = {}
+
+        response = client.get("/api/diagnostics/export")
+
+        assert response.status_code == 200
+        assert response.content_type == "application/json"
+        assert "attachment" in response.headers.get("Content-Disposition", "")
+
+        data = json.loads(response.data)
+        assert "system" in data
+        assert "logs" in data
+        assert "export_timestamp" in data
+
+
+class TestLogsEndpoint:
+    """Contract tests for GET /api/logs."""
+
+    def test_logs_invalid_service(self, client, mock_cups):
+        """Test logs returns 400 for invalid service."""
+        response = client.get("/api/logs?service=invalid")
+
+        assert response.status_code == 400
+
+    def test_logs_app_returns_entries(self, client, mock_cups):
+        """Test in-memory app logs return entries."""
+        response = client.get("/api/logs?service=app")
+
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        assert data["service"] == "app"
+        assert "entries" in data
+
+    def test_logs_cups_error_accepted(self, client, mock_cups):
+        """Test cups-error is an accepted log service."""
+        # Will fail to read the file on non-Pi, but won't return 400
+        response = client.get("/api/logs?service=cups-error")
+
+        # Either 200 (file found) or 500 (file not found) - not 400
+        assert response.status_code != 400
