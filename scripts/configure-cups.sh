@@ -126,17 +126,21 @@ EOF
 configure_job_preservation() {
     log_info "Configuring job preservation across restarts..."
 
-    # Set job retention settings
+    # Set job retention settings (conservative for 1GB Pi)
     if [[ -f "$CUPS_CONFIG" ]]; then
-        # Preserve jobs for 1 day after completion
+        # Preserve jobs for 12 hours after completion
         if ! grep -q "^PreserveJobHistory" "$CUPS_CONFIG"; then
             echo "PreserveJobHistory Yes" >> "$CUPS_CONFIG"
         fi
-        if ! grep -q "^PreserveJobFiles" "$CUPS_CONFIG"; then
-            echo "PreserveJobFiles 1d" >> "$CUPS_CONFIG"
+        if grep -q "^PreserveJobFiles" "$CUPS_CONFIG"; then
+            sed -i 's/^PreserveJobFiles.*/PreserveJobFiles 12h/' "$CUPS_CONFIG"
+        else
+            echo "PreserveJobFiles 12h" >> "$CUPS_CONFIG"
         fi
-        if ! grep -q "^MaxJobs" "$CUPS_CONFIG"; then
-            echo "MaxJobs 500" >> "$CUPS_CONFIG"
+        if grep -q "^MaxJobs" "$CUPS_CONFIG"; then
+            sed -i 's/^MaxJobs.*/MaxJobs 100/' "$CUPS_CONFIG"
+        else
+            echo "MaxJobs 100" >> "$CUPS_CONFIG"
         fi
     fi
 }

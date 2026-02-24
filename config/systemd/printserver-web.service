@@ -6,7 +6,7 @@ Wants=network-online.target avahi-daemon.service
 Requires=cups.service
 
 [Service]
-Type=simple
+Type=exec
 User=root
 Group=root
 WorkingDirectory=/opt/printserver
@@ -16,7 +16,19 @@ Environment=PRINTSERVER_CONFIG=/etc/printserver/config.ini
 
 # Wait for CUPS to be ready before starting (up to 20s, then start anyway)
 ExecStartPre=/bin/sh -c 'for i in 1 2 3 4 5 6 7 8 9 10; do lpstat -r 2>/dev/null && exit 0; sleep 2; done; echo "CUPS not ready after 20s, starting anyway"; exit 0'
-ExecStart=/usr/bin/python3 -c "from web.app import create_app; app = create_app(); app.run(host='0.0.0.0', port=5000)"
+ExecStart=/opt/printserver/venv/bin/gunicorn \
+    --workers 2 \
+    --threads 2 \
+    --worker-class gthread \
+    --bind 0.0.0.0:5000 \
+    --timeout 30 \
+    --graceful-timeout 10 \
+    --keep-alive 5 \
+    --max-requests 1000 \
+    --max-requests-jitter 50 \
+    --access-logfile - \
+    --error-logfile - \
+    'web.app:create_app()'
 ExecReload=/bin/kill -HUP $MAINPID
 
 # Restart configuration
@@ -25,6 +37,13 @@ RestartSec=5
 StartLimitIntervalSec=300
 StartLimitBurst=5
 
+# Timeouts
+TimeoutStartSec=30
+TimeoutStopSec=10
+
+# Watchdog: systemd kills service if unresponsive for 60s
+WatchdogSec=60
+
 # Security hardening
 NoNewPrivileges=true
 ProtectSystem=strict
@@ -32,9 +51,12 @@ ProtectHome=read-only
 PrivateTmp=true
 ReadWritePaths=/var/log/printserver
 
-# Resource limits
+# Resource limits — tuned for 1GB Raspberry Pi
+MemoryHigh=192M
 MemoryMax=256M
+MemorySwapMax=64M
 CPUQuota=50%
+OOMPolicy=kill
 
 # Logging
 StandardOutput=journal

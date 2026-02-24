@@ -153,7 +153,7 @@ install_python_app() {
 
     # Install dependencies
     "$INSTALL_DIR/venv/bin/pip" install --upgrade pip
-    "$INSTALL_DIR/venv/bin/pip" install flask pycups
+    "$INSTALL_DIR/venv/bin/pip" install flask pycups gunicorn
 
     # Copy application files
     cp -r "$PROJECT_DIR/src/"* "$INSTALL_DIR/"
@@ -236,6 +236,54 @@ install_systemd_service() {
     systemctl enable avahi-daemon.service
 
     log_info "Systemd services configured"
+}
+
+configure_log_limits() {
+    log_info "Configuring log retention limits..."
+
+    # journald: cap at 50M to prevent disk fill on small SD cards
+    mkdir -p /etc/systemd/journald.conf.d
+    cat > /etc/systemd/journald.conf.d/printserver.conf << 'EOF'
+[Journal]
+SystemMaxUse=50M
+RuntimeMaxUse=30M
+MaxRetentionSec=7day
+EOF
+    systemctl restart systemd-journald 2>/dev/null || true
+
+    # CUPS error log rotation
+    cat > /etc/logrotate.d/cups-printserver << 'EOF'
+/var/log/cups/error_log {
+    daily
+    rotate 3
+    compress
+    delaycompress
+    missingok
+    notifempty
+}
+EOF
+
+    log_info "Log limits configured"
+}
+
+configure_system_tuning() {
+    log_info "Tuning system for low-memory Raspberry Pi..."
+
+    # Reduce swappiness: prefer dropping cache over swapping
+    if ! grep -q "vm.swappiness" /etc/sysctl.conf 2>/dev/null; then
+        echo "vm.swappiness=10" >> /etc/sysctl.conf
+        sysctl -w vm.swappiness=10 2>/dev/null || true
+    fi
+
+    # Disable unnecessary services to free memory
+    for svc in bluetooth triggerhappy ModemManager; do
+        if systemctl is-enabled "$svc" 2>/dev/null | grep -q "enabled"; then
+            systemctl disable --now "$svc" 2>/dev/null || true
+            log_info "Disabled $svc"
+        fi
+    done
+
+    log_info "System tuning applied"
 }
 
 wait_for_cups() {
@@ -444,6 +492,8 @@ main() {
     configure_cups
     configure_avahi
     install_systemd_service
+    configure_log_limits
+    configure_system_tuning
 
     # If updating, restart services; otherwise start them fresh
     if [[ "$IS_UPDATE" == "true" ]]; then

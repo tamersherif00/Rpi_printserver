@@ -3,6 +3,7 @@
 import logging
 import socket
 import subprocess
+import time
 from datetime import datetime
 from typing import Any
 
@@ -29,6 +30,21 @@ ALLOWED_RESTART_SERVICES = {"cups", "avahi-daemon", "printserver-web"}
 
 # Path to the restart helper script
 RESTART_SCRIPT = "/opt/printserver/scripts/restart-service.sh"
+
+# Simple TTL cache for expensive subprocess-heavy functions
+_cache: dict[str, tuple[float, Any]] = {}
+
+
+def _cached_call(key: str, fn, ttl_seconds: float):
+    """Return cached result if fresh, otherwise call fn() and cache it."""
+    now = time.monotonic()
+    if key in _cache:
+        cached_time, cached_value = _cache[key]
+        if now - cached_time < ttl_seconds:
+            return cached_value
+    result = fn()
+    _cache[key] = (now, result)
+    return result
 
 
 def get_cups_client(app: Flask) -> CupsClient:
@@ -67,7 +83,7 @@ def _get_ip_address() -> str:
             ["hostname", "-I"],
             capture_output=True,
             text=True,
-            timeout=3,
+            timeout=2,
         )
         if result.returncode == 0:
             ips = result.stdout.strip().split()
@@ -110,7 +126,7 @@ def get_server_status() -> dict[str, Any]:
             ["systemctl", "is-active", "cups"],
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=3,
         )
         cups_running = result.stdout.strip() == "active"
     except Exception as e:
@@ -123,7 +139,7 @@ def get_server_status() -> dict[str, Any]:
             ["systemctl", "is-active", "avahi-daemon"],
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=3,
         )
         avahi_running = result.stdout.strip() == "active"
     except Exception as e:
@@ -140,7 +156,7 @@ def get_server_status() -> dict[str, Any]:
             ["iwgetid", "-r"],
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=3,
         )
         if result.returncode == 0:
             wifi_ssid = result.stdout.strip()
@@ -151,7 +167,7 @@ def get_server_status() -> dict[str, Any]:
             ["iwconfig", "wlan0"],
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=3,
         )
         if "Signal level" in result.stdout:
             for line in result.stdout.split("\n"):
@@ -188,7 +204,7 @@ def _get_service_status(service: str) -> dict[str, Any]:
         result = subprocess.run(
             ["systemctl", "show", service,
              "--property=ActiveState,SubState,StateChangeTimestamp"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, timeout=3,
         )
         if result.returncode == 0:
             for line in result.stdout.strip().split("\n"):
@@ -238,7 +254,7 @@ def _get_system_diagnostics() -> dict[str, Any]:
     try:
         result = subprocess.run(
             ["avahi-browse", "-t", "_ipp._tcp", "-p"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=3,
         )
         if result.returncode == 0 and result.stdout.strip():
             for line in result.stdout.strip().split("\n"):
@@ -294,7 +310,7 @@ def _get_system_diagnostics() -> dict[str, Any]:
             diag["network"]["gateway"] = gateway
             ping = subprocess.run(
                 ["ping", "-c", "1", "-W", "2", gateway],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True, text=True, timeout=3,
             )
             diag["network"]["gateway_reachable"] = ping.returncode == 0
         else:
@@ -430,7 +446,7 @@ def register_routes(app: Flask) -> None:
         - printers: {total, online, offline}
         - jobs: {active, pending, completed_today}
         """
-        server_info = get_server_status()
+        server_info = _cached_call("server_status", get_server_status, 30)
         cups_error = False
 
         try:
@@ -596,7 +612,7 @@ def register_routes(app: Flask) -> None:
     @app.route("/api/diagnostics")
     def api_diagnostics():
         """Get comprehensive system diagnostics snapshot."""
-        return jsonify(_get_system_diagnostics())
+        return jsonify(_cached_call("diagnostics", _get_system_diagnostics, 15))
 
     @app.route("/api/logs")
     def api_logs():
