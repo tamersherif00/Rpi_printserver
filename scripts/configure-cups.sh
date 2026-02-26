@@ -181,12 +181,15 @@ main() {
 
     backup_config
     configure_cups
+    configure_job_preservation
+
+    # Restart CUPS now so the new config is loaded before cupsctl calls
+    restart_cups
+
     configure_sharing
     configure_ipp
     configure_samba
-    configure_job_preservation
     add_user_to_lpadmin
-    restart_cups
 
     log_info "CUPS configuration complete"
 }
