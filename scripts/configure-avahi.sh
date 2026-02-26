@@ -41,17 +41,28 @@ configure_avahi_daemon() {
 
     AVAHI_CONFIG="/etc/avahi/avahi-daemon.conf"
 
+    # Helper: set a key=value in the config, adding it under [server] if absent
+    set_avahi_option() {
+        local key="$1"
+        local value="$2"
+        if grep -q "^${key}=" "$AVAHI_CONFIG"; then
+            sed -i "s|^${key}=.*|${key}=${value}|" "$AVAHI_CONFIG"
+        else
+            # Append under [server] section if it exists, else at end of file
+            if grep -q "^\[server\]" "$AVAHI_CONFIG"; then
+                sed -i "/^\[server\]/a ${key}=${value}" "$AVAHI_CONFIG"
+            else
+                echo "${key}=${value}" >> "$AVAHI_CONFIG"
+            fi
+        fi
+    }
+
     # Ensure Avahi is configured for local network discovery
     if [[ -f "$AVAHI_CONFIG" ]]; then
-        # Enable IPv4
-        if grep -q "^use-ipv4=" "$AVAHI_CONFIG"; then
-            sed -i 's/^use-ipv4=.*/use-ipv4=yes/' "$AVAHI_CONFIG"
-        fi
-
-        # Enable publishing
-        if grep -q "^disable-publishing=" "$AVAHI_CONFIG"; then
-            sed -i 's/^disable-publishing=.*/disable-publishing=no/' "$AVAHI_CONFIG"
-        fi
+        set_avahi_option "use-ipv4" "yes"
+        set_avahi_option "disable-publishing" "no"
+        set_avahi_option "publish-workstation" "yes"
+        set_avahi_option "publish-addresses" "yes"
 
         log_info "Avahi daemon configured"
     else
@@ -188,18 +199,14 @@ sync_airprint_services() {
         [[ -z "$printer" ]] && continue
         expected_files+=("AirPrint-${printer}.service")
 
-        # Only regenerate if the file doesn't already exist
+        # Always regenerate so stale or incorrect files are replaced
         local service_file="$AVAHI_SERVICES_DIR/AirPrint-${printer}.service"
-        if [[ ! -f "$service_file" ]]; then
-            local printer_info
-            printer_info=$(lpstat -l -p "$printer" 2>/dev/null | grep -oP 'Description: \K.+' || echo "$printer")
-            local printer_location
-            printer_location=$(lpoptions -p "$printer" 2>/dev/null | grep -oP 'printer-location=\K[^,]+' || echo "")
+        local printer_info
+        printer_info=$(lpstat -l -p "$printer" 2>/dev/null | grep -oP 'Description: \K.+' || echo "$printer")
+        local printer_location
+        printer_location=$(lpoptions -p "$printer" 2>/dev/null | grep -oP 'printer-location=\K[^,]+' || echo "")
 
-            generate_airprint_service "$printer" "$printer_info" "$printer_location"
-        else
-            log_info "AirPrint service already exists for: $printer"
-        fi
+        generate_airprint_service "$printer" "$printer_info" "$printer_location"
     done <<< "$printers"
 
     # Remove stale service files for printers that no longer exist in CUPS

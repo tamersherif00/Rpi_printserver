@@ -32,6 +32,7 @@ while read -r printer; do
         log_info "Enabling printer: $printer"
         cupsenable "$printer" 2>/dev/null || true
         cupsaccept "$printer" 2>/dev/null || true
+        lpadmin -p "$printer" -o printer-is-shared=true 2>/dev/null || true
         ((printer_count++))
     fi
 done < <(lpstat -p 2>/dev/null | awk '{print $2}')

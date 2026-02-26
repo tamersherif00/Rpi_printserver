@@ -408,10 +408,11 @@ detect_printer() {
                 log_info "Printer '$PRINTER_NAME' already configured"
             fi
 
-            # Enable printer and set to accept jobs
-            log_info "Configuring printer to accept jobs..."
+            # Enable printer, accept jobs, and mark as shared for AirPrint/network discovery
+            log_info "Configuring printer to accept jobs and enable sharing..."
             cupsenable "$PRINTER_NAME" 2>/dev/null || true
             cupsaccept "$PRINTER_NAME" 2>/dev/null || true
+            lpadmin -p "$PRINTER_NAME" -o printer-is-shared=true 2>/dev/null || true
             log_info "Printer configured and ready"
             return 0
         fi
@@ -437,6 +438,7 @@ enable_all_printers() {
             log_info "Enabling printer: $printer"
             cupsenable "$printer" 2>/dev/null || true
             cupsaccept "$printer" 2>/dev/null || true
+            lpadmin -p "$printer" -o printer-is-shared=true 2>/dev/null || true
         fi
     done
 }
