@@ -71,6 +71,7 @@ install_system_packages() {
         cups \
         cups-filters \
         cups-browsed \
+        cups-bsd \
         avahi-daemon \
         avahi-utils \
         python3 \
@@ -79,6 +80,7 @@ install_system_packages() {
         python3-cups \
         libcups2-dev \
         samba \
+        wsdd \
         wireless-tools
 
     # Install Brother printer drivers
@@ -266,6 +268,8 @@ install_systemd_service() {
     systemctl enable printserver-web.service
     systemctl enable cups.service
     systemctl enable avahi-daemon.service
+    systemctl enable smbd.service nmbd.service 2>/dev/null || true
+    systemctl enable wsdd.service 2>/dev/null || true
 
     log_info "Systemd services configured"
 }
@@ -347,6 +351,8 @@ start_services() {
     wait_for_cups 10 2
 
     systemctl start avahi-daemon
+    systemctl start smbd nmbd 2>/dev/null || true
+    systemctl start wsdd 2>/dev/null || true
     systemctl start printserver-web
 
     # Verify with health check
@@ -371,8 +377,9 @@ restart_services() {
     systemctl restart avahi-daemon
     sleep 1
 
-    # Restart Samba to apply Windows sharing changes
+    # Restart Samba and WSD daemon for Windows sharing/discovery
     systemctl restart smbd nmbd 2>/dev/null || true
+    systemctl restart wsdd 2>/dev/null || true
     sleep 1
 
     # Restart web interface to apply code updates
