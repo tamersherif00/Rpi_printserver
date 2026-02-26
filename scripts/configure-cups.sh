@@ -90,6 +90,11 @@ configure_samba() {
 
     SAMBA_CONFIG="/etc/samba/smb.conf"
 
+    if [[ ! -f "$SAMBA_CONFIG" ]]; then
+        log_warn "Samba config not found at $SAMBA_CONFIG, skipping"
+        return 0
+    fi
+
     # Check if CUPS printing section exists
     if ! grep -q "\[printers\]" "$SAMBA_CONFIG" 2>/dev/null; then
         log_info "Adding printer sharing to Samba configuration..."

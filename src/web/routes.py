@@ -183,7 +183,10 @@ def get_server_status() -> dict[str, Any]:
             for line in result.stdout.split("\n"):
                 if "Signal level" in line:
                     if "%" in line:
-                        wifi_signal = int(line.split("%")[0].split("=")[-1])
+                        try:
+                            wifi_signal = int(line.split("%")[0].split("=")[-1])
+                        except (ValueError, IndexError):
+                            pass
                     break
     except Exception:
         pass
@@ -315,8 +318,9 @@ def _get_system_diagnostics() -> dict[str, Any]:
             ["ip", "route", "show", "default"],
             capture_output=True, text=True, timeout=3,
         )
-        if result.returncode == 0 and result.stdout.strip():
-            gateway = result.stdout.strip().split()[2]
+        parts = result.stdout.strip().split()
+        if result.returncode == 0 and len(parts) > 2:
+            gateway = parts[2]
             diag["network"]["gateway"] = gateway
             ping = subprocess.run(
                 ["ping", "-c", "1", "-W", "2", gateway],
@@ -362,12 +366,13 @@ def _get_system_diagnostics() -> dict[str, Any]:
                 lines = result.stdout.strip().split("\n")
                 if len(lines) >= 2:
                     parts = lines[1].split()
-                    diag["storage"][mount] = {
-                        "total_mb": int(parts[1].rstrip("M")),
-                        "used_mb": int(parts[2].rstrip("M")),
-                        "available_mb": int(parts[3].rstrip("M")),
-                        "used_percent": parts[4],
-                    }
+                    if len(parts) >= 5:
+                        diag["storage"][mount] = {
+                            "total_mb": int(parts[1].rstrip("M")),
+                            "used_mb": int(parts[2].rstrip("M")),
+                            "available_mb": int(parts[3].rstrip("M")),
+                            "used_percent": parts[4],
+                        }
         except Exception:
             pass
 
@@ -535,7 +540,10 @@ def register_routes(app: Flask) -> None:
 
             # Get filter parameters
             status = request.args.get("status", "all")
-            limit = min(int(request.args.get("limit", 50)), 100)
+            try:
+                limit = min(int(request.args.get("limit", 50)), 100)
+            except (ValueError, TypeError):
+                limit = 50
 
             # Map status filter
             if status == "pending":
@@ -679,7 +687,10 @@ def register_routes(app: Flask) -> None:
             lines: Number of lines to return (default: 100, max: 500)
         """
         service = request.args.get("service", "printserver-web")
-        lines = min(int(request.args.get("lines", 100)), 500)
+        try:
+            lines = min(int(request.args.get("lines", 100)), 500)
+        except (ValueError, TypeError):
+            lines = 100
 
         if service not in ALLOWED_LOG_SERVICES:
             return jsonify({
