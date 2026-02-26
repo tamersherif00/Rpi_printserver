@@ -80,8 +80,15 @@ install_system_packages() {
         python3-cups \
         libcups2-dev \
         samba \
-        wsdd \
         wireless-tools
+
+    # wsdd (Web Services for Devices) enables Windows 10/11 auto-discovery.
+    # Available on newer Raspberry Pi OS; skip gracefully on older releases.
+    if apt-cache show wsdd > /dev/null 2>&1; then
+        apt-get install -y wsdd
+    else
+        log_warn "wsdd not available in this OS's package repos — Windows auto-discovery via WSD will not work. Use manual 'Add a printer' in Windows instead."
+    fi
 
     # Install Brother printer drivers
     log_info "Installing Brother printer drivers..."

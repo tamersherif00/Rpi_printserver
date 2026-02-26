@@ -1,9 +1,9 @@
 #!/bin/bash
 # Avahi Configuration Script
 # Configures Avahi for AirPrint and printer discovery.
-# Designed to be called both at install time and dynamically by udev
-# when printers are plugged/unplugged. Generates one Avahi service file
-# per CUPS printer, removes stale ones, and reloads Avahi.
+# CUPS advertises _ipp._tcp/_ipps._tcp natively via its dnssd integration;
+# this script ensures Avahi is correctly configured and removes any legacy
+# custom service files that would cause name collisions.
 
 set -e
 
@@ -97,143 +97,21 @@ wait_for_cups() {
     return 1
 }
 
-generate_airprint_service() {
-    local printer_name="$1"
-    local printer_info="$2"
-    local printer_location="$3"
+remove_custom_airprint_services() {
+    # CUPS advertises _ipp._tcp and _ipps._tcp natively via its dnssd integration
+    # (BrowseLocalProtocols dnssd in cupsd.conf). Custom service files in
+    # /etc/avahi/services/ duplicate those registrations and cause "Local name
+    # collision" errors that make Avahi drop the entire service group.
+    # Remove any leftover custom files so CUPS is the sole advertiser.
 
-    log_info "Generating AirPrint service for: $printer_name"
-
-    local hostname
-    hostname=$(hostname)
-
-    local service_file="$AVAHI_SERVICES_DIR/AirPrint-${printer_name}.service"
-
-    # Try template from deployed location, then repo location
-    local template=""
-    for candidate in \
-        "$PROJECT_DIR/config/avahi/airprint.service.template" \
-        "/opt/printserver/config/avahi/airprint.service.template"; do
-        if [[ -f "$candidate" ]]; then
-            template="$candidate"
-            break
-        fi
-    done
-
-    if [[ -n "$template" ]]; then
-        log_info "Using AirPrint service template..."
-        sed -e "s|{{PRINTER_NAME}}|$printer_name|g" \
-            -e "s|{{PRINTER_INFO}}|$printer_info|g" \
-            -e "s|{{PRINTER_LOCATION}}|$printer_location|g" \
-            -e "s|{{HOSTNAME}}|$hostname|g" \
-            "$template" > "$service_file"
+    local count
+    count=$(find "$AVAHI_SERVICES_DIR" -maxdepth 1 -name 'AirPrint-*.service' 2>/dev/null | wc -l)
+    if [[ "$count" -gt 0 ]]; then
+        log_info "Removing $count custom AirPrint service file(s) — CUPS handles dnssd natively"
+        rm -f "$AVAHI_SERVICES_DIR"/AirPrint-*.service
     else
-        log_info "Generating AirPrint service file (no template found)..."
-        cat > "$service_file" << EOF
-<?xml version="1.0" standalone='no'?>
-<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
-<service-group>
-  <name replace-wildcards="yes">$printer_info @ %h</name>
-
-  <service>
-    <type>_ipp._tcp</type>
-    <subtype>_universal._sub._ipp._tcp</subtype>
-    <port>631</port>
-    <txt-record>txtvers=1</txt-record>
-    <txt-record>qtotal=1</txt-record>
-    <txt-record>rp=printers/$printer_name</txt-record>
-    <txt-record>ty=$printer_info</txt-record>
-    <txt-record>adminurl=http://$hostname.local:631/printers/$printer_name</txt-record>
-    <txt-record>note=$printer_location</txt-record>
-    <txt-record>priority=0</txt-record>
-    <txt-record>product=(GPL Ghostscript)</txt-record>
-    <txt-record>pdl=application/octet-stream,application/pdf,application/postscript,image/gif,image/jpeg,image/png,image/tiff,image/urf,application/vnd.cups-banner,application/vnd.cups-pdf,application/vnd.cups-postscript,application/vnd.cups-raw</txt-record>
-    <txt-record>URF=W8,SRGB24,CP1,RS300</txt-record>
-    <txt-record>Color=T</txt-record>
-    <txt-record>Duplex=F</txt-record>
-    <txt-record>Copies=T</txt-record>
-    <txt-record>Collate=T</txt-record>
-    <txt-record>Punch=F</txt-record>
-    <txt-record>Bind=F</txt-record>
-    <txt-record>Sort=F</txt-record>
-    <txt-record>Scan=F</txt-record>
-    <txt-record>Fax=F</txt-record>
-    <txt-record>TLS=1.2</txt-record>
-  </service>
-
-  <service>
-    <type>_ipps._tcp</type>
-    <subtype>_universal._sub._ipps._tcp</subtype>
-    <port>631</port>
-    <txt-record>txtvers=1</txt-record>
-    <txt-record>qtotal=1</txt-record>
-    <txt-record>rp=printers/$printer_name</txt-record>
-    <txt-record>ty=$printer_info</txt-record>
-    <txt-record>adminurl=https://$hostname.local:631/printers/$printer_name</txt-record>
-    <txt-record>note=$printer_location</txt-record>
-    <txt-record>pdl=application/octet-stream,application/pdf,application/postscript,image/gif,image/jpeg,image/png,image/tiff,image/urf,application/vnd.cups-banner,application/vnd.cups-pdf,application/vnd.cups-postscript,application/vnd.cups-raw</txt-record>
-    <txt-record>URF=W8,SRGB24,CP1,RS300</txt-record>
-    <txt-record>TLS=1.2</txt-record>
-  </service>
-</service-group>
-EOF
+        log_info "No custom AirPrint service files to remove"
     fi
-
-    log_info "Created AirPrint service: $service_file"
-}
-
-sync_airprint_services() {
-    # Synchronize Avahi service files with the current set of CUPS printers.
-    # Creates files for new printers, removes files for printers that are gone.
-
-    log_info "Syncing AirPrint services with CUPS printers..."
-
-    # Wait for CUPS to be ready (important after hotplug-triggered CUPS restart)
-    wait_for_cups 10 2 || true
-
-    # Get current CUPS printers (skip the virtual PDF printer)
-    local printers
-    printers=$(lpstat -p 2>/dev/null | awk '{print $2}' | grep -v '^PDF$' || echo "")
-
-    if [[ -z "$printers" ]]; then
-        log_info "No physical printers in CUPS. Removing all AirPrint service files."
-        rm -f "$AVAHI_SERVICES_DIR"/AirPrint-*.service 2>/dev/null || true
-        return 0
-    fi
-
-    # Build set of expected service file names
-    local expected_files=()
-    while IFS= read -r printer; do
-        [[ -z "$printer" ]] && continue
-        expected_files+=("AirPrint-${printer}.service")
-
-        # Always regenerate so stale or incorrect files are replaced
-        local service_file="$AVAHI_SERVICES_DIR/AirPrint-${printer}.service"
-        local printer_info
-        printer_info=$(lpstat -l -p "$printer" 2>/dev/null | grep -oP 'Description: \K.+' || echo "$printer")
-        local printer_location
-        printer_location=$(lpstat -l -p "$printer" 2>/dev/null | grep -oP 'Location:\s+\K.+' || echo "")
-
-        generate_airprint_service "$printer" "$printer_info" "$printer_location"
-    done <<< "$printers"
-
-    # Remove stale service files for printers that no longer exist in CUPS
-    for existing_file in "$AVAHI_SERVICES_DIR"/AirPrint-*.service; do
-        [[ ! -f "$existing_file" ]] && continue
-        local basename
-        basename=$(basename "$existing_file")
-        local found=false
-        for expected in "${expected_files[@]}"; do
-            if [[ "$basename" == "$expected" ]]; then
-                found=true
-                break
-            fi
-        done
-        if [[ "$found" == "false" ]]; then
-            log_info "Removing stale AirPrint service: $basename"
-            rm -f "$existing_file"
-        fi
-    done
 }
 
 reload_avahi() {
@@ -280,7 +158,7 @@ main() {
 
     check_avahi_installed
     configure_avahi_daemon
-    sync_airprint_services
+    remove_custom_airprint_services
     reload_avahi
     verify_services
 
