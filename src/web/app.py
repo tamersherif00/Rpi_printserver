@@ -1,8 +1,12 @@
 """Flask application factory for the print server web interface."""
 
 import collections
+import gc
 import logging
 import os
+import resource
+import threading
+import time
 from datetime import datetime
 
 from flask import Flask, request
@@ -20,7 +24,7 @@ class RingBufferHandler(logging.Handler):
     without requiring journald or SSH access.
     """
 
-    def __init__(self, capacity: int = 500):
+    def __init__(self, capacity: int = 200):
         super().__init__()
         self._buffer: collections.deque[dict] = collections.deque(maxlen=capacity)
 
@@ -43,6 +47,56 @@ class RingBufferHandler(logging.Handler):
         """
         entries = list(self._buffer)
         return entries[-count:]
+
+
+def _make_memory_watchdog(cache: dict) -> threading.Thread:
+    """Create a daemon thread that periodically forces GC and monitors RSS.
+
+    Runs every 5 minutes. Clears the route cache if memory is critical
+    (>190 MB RSS), and logs a warning above 150 MB.  The systemd unit
+    enforces a hard MemoryMax=256 M; this gives an earlier safety valve
+    so the Pi never OOM-freezes.
+
+    Args:
+        cache: The module-level _cache dict from routes, passed by reference
+               so the watchdog can clear it without importing routes.
+
+    Returns:
+        Daemon Thread (not yet started).
+    """
+    INTERVAL_S = 300        # check every 5 minutes
+    WARN_MB = 150           # soft warning threshold
+    CRITICAL_MB = 190       # clear cache above this (systemd kills at 256 MB)
+
+    def _rss_mb() -> float:
+        # ru_maxrss is in kB on Linux
+        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+
+    def _run():
+        while True:
+            time.sleep(INTERVAL_S)
+            try:
+                collected = gc.collect()
+                rss = _rss_mb()
+                logger.info(
+                    "MemoryWatchdog: GC freed %d objects | RSS=%.1f MB | "
+                    "cache_keys=%d",
+                    collected, rss, len(cache),
+                )
+                if rss > CRITICAL_MB:
+                    logger.warning(
+                        "MemoryWatchdog CRITICAL: RSS=%.1f MB — clearing route cache", rss
+                    )
+                    cache.clear()
+                    gc.collect()
+                elif rss > WARN_MB:
+                    logger.warning(
+                        "MemoryWatchdog: RSS=%.1f MB approaching systemd MemoryHigh", rss
+                    )
+            except Exception as exc:
+                logger.error("MemoryWatchdog error: %s", exc)
+
+    return threading.Thread(target=_run, name="memory-watchdog", daemon=True)
 
 
 def create_app(config_override: dict = None) -> Flask:
@@ -82,7 +136,7 @@ def create_app(config_override: dict = None) -> Flask:
     setup_logging(server_config.log_level)
 
     # Attach in-memory log ring buffer for web-based log viewing
-    ring_handler = RingBufferHandler(capacity=500)
+    ring_handler = RingBufferHandler(capacity=200)
     ring_handler.setFormatter(logging.Formatter(
         "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     ))
@@ -123,6 +177,13 @@ def create_app(config_override: dict = None) -> Flask:
     from . import routes
 
     routes.register_routes(app)
+
+    # Start memory watchdog (daemon thread: auto-exits with the process)
+    # Pass routes._cache by reference so the watchdog can clear it under pressure.
+    _watchdog = _make_memory_watchdog(routes._cache)
+    _watchdog.start()
+    app._memory_watchdog = _watchdog
+    logger.info("Memory watchdog thread started (interval=5min)")
 
     logger.info("Print server web application initialized")
 

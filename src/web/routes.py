@@ -36,8 +36,17 @@ _cache: dict[str, tuple[float, Any]] = {}
 
 
 def _cached_call(key: str, fn, ttl_seconds: float):
-    """Return cached result if fresh, otherwise call fn() and cache it."""
+    """Return cached result if fresh, otherwise call fn() and cache it.
+
+    Also evicts any fully-expired entries (older than 2× their TTL) to
+    prevent the cache dict from holding stale large dicts indefinitely.
+    """
     now = time.monotonic()
+    # Evict entries that are stale beyond 2× their TTL window
+    expired = [k for k, (t, _) in _cache.items() if now - t >= ttl_seconds * 2]
+    for k in expired:
+        del _cache[k]
+
     if key in _cache:
         cached_time, cached_value = _cache[key]
         if now - cached_time < ttl_seconds:
@@ -96,10 +105,11 @@ def _get_ip_address() -> str:
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.settimeout(2)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
+        try:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+        finally:
+            s.close()
     except Exception:
         return "127.0.0.1"
 
@@ -613,6 +623,52 @@ def register_routes(app: Flask) -> None:
     def api_diagnostics():
         """Get comprehensive system diagnostics snapshot."""
         return jsonify(_cached_call("diagnostics", _get_system_diagnostics, 15))
+
+    @app.route("/api/memory")
+    def api_memory():
+        """Get current process and system memory stats.
+
+        Useful for monitoring memory health without SSH access.
+        """
+        import gc as _gc
+        import resource as _resource
+
+        # Process RSS (ru_maxrss is kB on Linux)
+        rss_kb = _resource.getrusage(_resource.RUSAGE_SELF).ru_maxrss
+        rss_mb = round(rss_kb / 1024, 1)
+
+        # System-wide memory from /proc/meminfo
+        sys_mem: dict[str, int] = {}
+        try:
+            with open("/proc/meminfo") as f:
+                for line in f:
+                    if ":" in line:
+                        k, v = line.split(":", 1)
+                        parts = v.strip().split()
+                        sys_mem[k.strip()] = int(parts[0]) if parts else 0
+        except Exception:
+            pass
+
+        total_kb = sys_mem.get("MemTotal", 0)
+        available_kb = sys_mem.get("MemAvailable", 0)
+
+        return jsonify({
+            "process": {
+                "rss_mb": rss_mb,
+            },
+            "system": {
+                "total_mb": total_kb // 1024,
+                "available_mb": available_kb // 1024,
+                "used_percent": (
+                    round((1 - available_kb / total_kb) * 100, 1)
+                    if total_kb > 0 else 0
+                ),
+            },
+            "gc": {
+                "counts": list(_gc.get_count()),
+                "cache_entries": len(_cache),
+            },
+        })
 
     @app.route("/api/logs")
     def api_logs():
