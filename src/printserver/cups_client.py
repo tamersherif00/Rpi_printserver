@@ -282,11 +282,12 @@ class CupsClient:
             logger.error(f"Failed to get job attributes: {e}")
             raise CupsClientError(f"Failed to get job attributes: {e}") from e
 
-    def cancel_job(self, job_id: int) -> bool:
+    def cancel_job(self, job_id: int, purge: bool = False) -> bool:
         """Cancel a print job.
 
         Args:
             job_id: Job ID to cancel.
+            purge: If True, forcibly purge the job even if stuck or stopped.
 
         Returns:
             True if successful.
@@ -296,14 +297,62 @@ class CupsClient:
         """
         self.ensure_connected()
         try:
-            self.connection.cancelJob(job_id)
-            logger.info(f"Canceled job {job_id}")
+            self.connection.cancelJob(job_id, purge=purge)
+            logger.info(f"{'Purged' if purge else 'Canceled'} job {job_id}")
             return True
         except CupsClientError:
             raise
         except Exception as e:
             logger.error(f"Failed to cancel job {job_id}: {e}")
             raise CupsClientError(f"Failed to cancel job: {e}") from e
+
+    def cancel_all_jobs(self, printer_name: str, purge: bool = True) -> bool:
+        """Cancel all jobs on a printer, optionally purging stuck ones.
+
+        Args:
+            printer_name: Printer whose jobs to cancel.
+            purge: If True, forcibly purge all jobs (default True).
+
+        Returns:
+            True if successful.
+
+        Raises:
+            CupsClientError: If operation fails.
+        """
+        self.ensure_connected()
+        try:
+            self.connection.cancelAllJobs(printer_name, purge=purge)
+            logger.info(f"Canceled all jobs on '{printer_name}' (purge={purge})")
+            return True
+        except CupsClientError:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to cancel all jobs on '{printer_name}': {e}")
+            raise CupsClientError(f"Failed to cancel all jobs: {e}") from e
+
+    def accept_printer(self, printer_name: str) -> bool:
+        """Enable a printer and make it accept jobs (cupsenable + cupsaccept).
+
+        Args:
+            printer_name: Printer name.
+
+        Returns:
+            True if successful.
+
+        Raises:
+            CupsClientError: If operation fails.
+        """
+        self.ensure_connected()
+        try:
+            self.connection.enablePrinter(printer_name)
+            self.connection.acceptJobs(printer_name)
+            logger.info(f"Enabled '{printer_name}' and set to accept jobs")
+            return True
+        except CupsClientError:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to accept jobs on '{printer_name}': {e}")
+            raise CupsClientError(f"Failed to accept jobs on printer: {e}") from e
 
     def print_test_page(self, printer_name: str) -> int:
         """Print a CUPS test page on the specified printer.

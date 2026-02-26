@@ -214,19 +214,20 @@ def get_job(cups_client: CupsClient, job_id: int) -> Optional[PrintJob]:
         return None
 
 
-def cancel_job(cups_client: CupsClient, job_id: int) -> bool:
+def cancel_job(cups_client: CupsClient, job_id: int, purge: bool = False) -> bool:
     """Cancel a print job.
 
     Args:
         cups_client: Connected CUPS client.
         job_id: Job ID to cancel.
+        purge: If True, forcibly purge even stuck/stopped jobs.
 
     Returns:
         True if successful.
     """
     job = get_job(cups_client, job_id)
     if job and job.can_cancel:
-        return cups_client.cancel_job(job_id)
+        return cups_client.cancel_job(job_id, purge=purge)
     return False
 
 

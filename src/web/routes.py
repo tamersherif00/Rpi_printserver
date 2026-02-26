@@ -574,7 +574,12 @@ def register_routes(app: Flask) -> None:
 
     @app.route("/api/jobs/<int:job_id>", methods=["DELETE"])
     def api_cancel_job(job_id: int):
-        """Cancel a print job."""
+        """Cancel a print job.
+
+        Query params:
+            purge: 'true' to forcibly purge stuck or stopped jobs.
+        """
+        purge = request.args.get("purge", "false").lower() == "true"
         try:
             client = get_cups_client(app)
             job = get_job(client, job_id)
@@ -588,17 +593,56 @@ def register_routes(app: Flask) -> None:
                     "code": "INVALID_STATE"
                 }), 400
 
-            success = cancel_print_job(client, job_id)
+            success = cancel_print_job(client, job_id, purge=purge)
             if success:
                 return jsonify({
                     "success": True,
-                    "message": f"Job {job_id} canceled"
+                    "message": f"Job {job_id} {'purged' if purge else 'canceled'}"
                 })
             return jsonify({
                 "error": "Failed to cancel job",
                 "code": "CANCEL_FAILED"
             }), 500
         except CupsClientError as e:
+            return jsonify({"error": str(e), "code": "CUPS_ERROR"}), 500
+
+    @app.route("/api/jobs", methods=["DELETE"])
+    def api_cancel_all_jobs():
+        """Cancel all jobs on a printer (clears stuck queue).
+
+        Query params:
+            printer: Printer name (required).
+            purge: 'false' to skip purge (default: true).
+        """
+        printer_name = request.args.get("printer", "")
+        if not printer_name:
+            return jsonify({"error": "Missing 'printer' query parameter",
+                            "code": "INVALID_REQUEST"}), 400
+        purge = request.args.get("purge", "true").lower() != "false"
+        try:
+            client = get_cups_client(app)
+            client.cancel_all_jobs(printer_name, purge=purge)
+            return jsonify({"success": True,
+                            "message": f"All jobs on '{printer_name}' cleared"})
+        except CupsClientError as e:
+            return jsonify({"error": str(e), "code": "CUPS_ERROR"}), 500
+
+    @app.route("/api/printers/<name>/accept", methods=["POST"])
+    def api_accept_printer(name: str):
+        """Enable printer and make it accept jobs (fixes 'accepting jobs: no').
+
+        Equivalent to cupsenable + cupsaccept.
+        """
+        try:
+            client = get_cups_client(app)
+            printer = get_printer(client, name)
+            if not printer:
+                return jsonify({"error": "Printer not found", "code": "NOT_FOUND"}), 404
+            client.accept_printer(name)
+            return jsonify({"success": True,
+                            "message": f"Printer '{name}' enabled and accepting jobs"})
+        except CupsClientError as e:
+            logger.error(f"Accept printer failed for '{name}': {e}")
             return jsonify({"error": str(e), "code": "CUPS_ERROR"}), 500
 
     @app.route("/health")
