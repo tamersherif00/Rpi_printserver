@@ -4,6 +4,8 @@ Documentation=https://github.com/your-repo/rpi-printserver
 After=network-online.target cups.service avahi-daemon.service
 Wants=network-online.target avahi-daemon.service
 Requires=cups.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=exec
@@ -35,8 +37,6 @@ ExecReload=/bin/kill -HUP $MAINPID
 # Restart configuration
 Restart=always
 RestartSec=5
-StartLimitIntervalSec=300
-StartLimitBurst=5
 
 # Timeouts
 TimeoutStartSec=30

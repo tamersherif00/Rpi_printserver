@@ -7,9 +7,10 @@ SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", ACTION=="add", \
     RUN+="/bin/systemctl restart cups.service", \
     RUN+="/usr/bin/logger -t printer-hotplug 'USB printer connected, restarting CUPS'"
 
-# Rule for USB printer disconnection - log the event
-SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", ACTION=="remove", \
-    RUN+="/usr/bin/logger -t printer-hotplug 'USB printer disconnected'"
+# Rule for USB printer disconnection - regenerate Avahi services to remove stale entries
+SUBSYSTEM=="usb", ACTION=="remove", ENV{ID_USB_INTERFACES}=="*:070102:*", \
+    RUN+="/usr/bin/logger -t printer-hotplug 'USB printer disconnected'", \
+    RUN+="/bin/bash -c 'sleep 5 && /opt/printserver/scripts/configure-avahi.sh &'"
 
 # Brother specific rules (common Brother USB vendor ID: 04f9)
 SUBSYSTEM=="usb", ATTR{idVendor}=="04f9", ACTION=="add", \
@@ -39,5 +40,6 @@ KERNEL=="lp[0-9]*", SUBSYSTEM=="usb", ACTION=="add", \
 SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", MODE="0666"
 
 # Trigger Avahi to regenerate AirPrint services when printer is added
+# Delay gives CUPS time to restart and register the new printer
 SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", ACTION=="add", \
-    RUN+="/opt/printserver/scripts/configure-avahi.sh"
+    RUN+="/bin/bash -c 'sleep 10 && /opt/printserver/scripts/configure-avahi.sh &'"

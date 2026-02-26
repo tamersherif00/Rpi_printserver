@@ -160,10 +160,18 @@ install_python_app() {
 
     # Copy and set up helper scripts
     mkdir -p "$INSTALL_DIR/scripts"
-    cp "$SCRIPT_DIR/set-hostname.sh" "$INSTALL_DIR/scripts/"
-    chmod +x "$INSTALL_DIR/scripts/set-hostname.sh"
-    cp "$SCRIPT_DIR/restart-service.sh" "$INSTALL_DIR/scripts/"
-    chmod +x "$INSTALL_DIR/scripts/restart-service.sh"
+    for script in set-hostname.sh restart-service.sh configure-avahi.sh enable-printers.sh; do
+        if [[ -f "$SCRIPT_DIR/$script" ]]; then
+            cp "$SCRIPT_DIR/$script" "$INSTALL_DIR/scripts/"
+            chmod +x "$INSTALL_DIR/scripts/$script"
+        fi
+    done
+
+    # Copy config templates (used by configure-avahi.sh at runtime)
+    mkdir -p "$INSTALL_DIR/config/avahi"
+    if [[ -f "$PROJECT_DIR/config/avahi/airprint.service.template" ]]; then
+        cp "$PROJECT_DIR/config/avahi/airprint.service.template" "$INSTALL_DIR/config/avahi/"
+    fi
 
     log_info "Python application installed"
 }
@@ -223,6 +231,19 @@ configure_cups() {
 configure_avahi() {
     log_info "Configuring Avahi for AirPrint..."
     bash "$SCRIPT_DIR/configure-avahi.sh"
+}
+
+install_udev_rules() {
+    log_info "Installing udev rules for printer hotplug..."
+
+    if [[ -f "$PROJECT_DIR/config/udev/99-printer.rules" ]]; then
+        cp "$PROJECT_DIR/config/udev/99-printer.rules" /etc/udev/rules.d/
+        udevadm control --reload-rules 2>/dev/null || true
+        udevadm trigger 2>/dev/null || true
+        log_info "udev rules installed"
+    else
+        log_warn "udev rules file not found, skipping"
+    fi
 }
 
 install_systemd_service() {
@@ -490,7 +511,7 @@ main() {
     configure_sudoers
     fix_hosts_file
     configure_cups
-    configure_avahi
+    install_udev_rules
     install_systemd_service
     configure_log_limits
     configure_system_tuning
@@ -503,6 +524,11 @@ main() {
         detect_printer
         enable_all_printers
     fi
+
+    # Configure Avahi AFTER printers are detected so service files
+    # are generated for any printer already connected at install time.
+    # On future hotplug events, udev triggers this script automatically.
+    configure_avahi
 
     print_summary
 }

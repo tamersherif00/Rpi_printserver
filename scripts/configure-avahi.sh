@@ -1,6 +1,9 @@
 #!/bin/bash
 # Avahi Configuration Script
-# Configures Avahi for AirPrint and printer discovery
+# Configures Avahi for AirPrint and printer discovery.
+# Designed to be called both at install time and dynamically by udev
+# when printers are plugged/unplugged. Generates one Avahi service file
+# per CUPS printer, removes stale ones, and reloads Avahi.
 
 set -e
 
@@ -8,16 +11,22 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 AVAHI_SERVICES_DIR="/etc/avahi/services"
 
+# Use a lock to prevent concurrent runs (udev can fire multiple events)
+LOCK_FILE="/tmp/configure-avahi.lock"
+
 log_info() {
     echo "[INFO] $1"
+    logger -t configure-avahi "[INFO] $1" 2>/dev/null || true
 }
 
 log_warn() {
     echo "[WARN] $1"
+    logger -t configure-avahi "[WARN] $1" 2>/dev/null || true
 }
 
 log_error() {
     echo "[ERROR] $1"
+    logger -t configure-avahi "[ERROR] $1" 2>/dev/null || true
 }
 
 check_avahi_installed() {
@@ -44,37 +53,29 @@ configure_avahi_daemon() {
             sed -i 's/^disable-publishing=.*/disable-publishing=no/' "$AVAHI_CONFIG"
         fi
 
-        # Allow interfaces (use all by default)
-        if grep -q "^#allow-interfaces=" "$AVAHI_CONFIG"; then
-            # Leave commented to allow all interfaces
-            :
-        fi
-
         log_info "Avahi daemon configured"
     else
         log_warn "Avahi config not found at $AVAHI_CONFIG"
     fi
 }
 
-get_printer_info() {
-    # Get the first available printer from CUPS
-    PRINTER_NAME=$(lpstat -p 2>/dev/null | head -1 | awk '{print $2}' || echo "")
+wait_for_cups() {
+    # After a USB hotplug event, CUPS needs time to restart and register
+    # the new printer. Poll until CUPS is ready or timeout.
+    local max_attempts=${1:-10}
+    local delay=${2:-2}
+    local attempt=1
 
-    if [[ -z "$PRINTER_NAME" ]]; then
-        log_warn "No printer found in CUPS. AirPrint service will use placeholder."
-        PRINTER_NAME="Printer"
-    fi
+    while [[ $attempt -le $max_attempts ]]; do
+        if lpstat -r 2>/dev/null | grep -q "scheduler is running"; then
+            return 0
+        fi
+        sleep "$delay"
+        ((attempt++))
+    done
 
-    # Get printer URI
-    PRINTER_URI=$(lpstat -v "$PRINTER_NAME" 2>/dev/null | awk '{print $4}' || echo "")
-
-    # Get printer location (default to empty)
-    PRINTER_LOCATION=$(lpoptions -p "$PRINTER_NAME" 2>/dev/null | grep -oP 'printer-location=\K[^,]+' || echo "")
-
-    # Get printer make/model
-    PRINTER_INFO=$(lpstat -l -p "$PRINTER_NAME" 2>/dev/null | grep -oP 'Description: \K.+' || echo "$PRINTER_NAME")
-
-    echo "$PRINTER_NAME|$PRINTER_URI|$PRINTER_LOCATION|$PRINTER_INFO"
+    log_warn "CUPS scheduler not ready after $((max_attempts * delay))s"
+    return 1
 }
 
 generate_airprint_service() {
@@ -84,39 +85,37 @@ generate_airprint_service() {
 
     log_info "Generating AirPrint service for: $printer_name"
 
-    # Get hostname
     local hostname
     hostname=$(hostname)
 
-    # Get IP address (prefer wlan0, fallback to eth0)
-    local ip_address
-    ip_address=$(ip -4 addr show wlan0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' || \
-                 ip -4 addr show eth0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' || \
-                 echo "")
-
-    # Create service file
     local service_file="$AVAHI_SERVICES_DIR/AirPrint-${printer_name}.service"
 
-    # Use template if available, otherwise generate
-    if [[ -f "$PROJECT_DIR/config/avahi/airprint.service.template" ]]; then
-        log_info "Using AirPrint service template..."
+    # Try template from deployed location, then repo location
+    local template=""
+    for candidate in \
+        "$PROJECT_DIR/config/avahi/airprint.service.template" \
+        "/opt/printserver/config/avahi/airprint.service.template"; do
+        if [[ -f "$candidate" ]]; then
+            template="$candidate"
+            break
+        fi
+    done
 
-        # Copy and customize template
+    if [[ -n "$template" ]]; then
+        log_info "Using AirPrint service template..."
         sed -e "s|{{PRINTER_NAME}}|$printer_name|g" \
             -e "s|{{PRINTER_INFO}}|$printer_info|g" \
             -e "s|{{PRINTER_LOCATION}}|$printer_location|g" \
             -e "s|{{HOSTNAME}}|$hostname|g" \
-            "$PROJECT_DIR/config/avahi/airprint.service.template" > "$service_file"
+            "$template" > "$service_file"
     else
-        log_info "Generating AirPrint service file..."
-
+        log_info "Generating AirPrint service file (no template found)..."
         cat > "$service_file" << EOF
 <?xml version="1.0" standalone='no'?>
 <!DOCTYPE service-group SYSTEM "avahi-service.dtd">
 <service-group>
   <name replace-wildcards="yes">$printer_info @ %h</name>
 
-  <!-- AirPrint service -->
   <service>
     <type>_ipp._tcp</type>
     <subtype>_universal._sub._ipp._tcp</subtype>
@@ -143,7 +142,6 @@ generate_airprint_service() {
     <txt-record>TLS=1.2</txt-record>
   </service>
 
-  <!-- IPP Everywhere (for Android/Chrome) -->
   <service>
     <type>_ipps._tcp</type>
     <subtype>_universal._sub._ipps._tcp</subtype>
@@ -165,62 +163,89 @@ EOF
     log_info "Created AirPrint service: $service_file"
 }
 
-remove_old_services() {
-    log_info "Removing old AirPrint service files..."
+sync_airprint_services() {
+    # Synchronize Avahi service files with the current set of CUPS printers.
+    # Creates files for new printers, removes files for printers that are gone.
 
-    # Remove any existing AirPrint service files
-    rm -f "$AVAHI_SERVICES_DIR"/AirPrint-*.service 2>/dev/null || true
-}
+    log_info "Syncing AirPrint services with CUPS printers..."
 
-create_airprint_services() {
-    log_info "Creating AirPrint services for all printers..."
+    # Wait for CUPS to be ready (important after hotplug-triggered CUPS restart)
+    wait_for_cups 10 2 || true
 
-    # Get list of printers
+    # Get current CUPS printers (skip the virtual PDF printer)
     local printers
-    printers=$(lpstat -p 2>/dev/null | awk '{print $2}' || echo "")
+    printers=$(lpstat -p 2>/dev/null | awk '{print $2}' | grep -v '^PDF$' || echo "")
 
     if [[ -z "$printers" ]]; then
-        log_warn "No printers found in CUPS. Skipping AirPrint service creation."
-        log_info "Add a printer to CUPS and re-run this script."
+        log_info "No physical printers in CUPS. Removing all AirPrint service files."
+        rm -f "$AVAHI_SERVICES_DIR"/AirPrint-*.service 2>/dev/null || true
         return 0
     fi
 
-    remove_old_services
-
-    # Create service for each printer
+    # Build set of expected service file names
+    local expected_files=()
     while IFS= read -r printer; do
-        if [[ -n "$printer" ]]; then
-            # Get printer details
+        [[ -z "$printer" ]] && continue
+        expected_files+=("AirPrint-${printer}.service")
+
+        # Only regenerate if the file doesn't already exist
+        local service_file="$AVAHI_SERVICES_DIR/AirPrint-${printer}.service"
+        if [[ ! -f "$service_file" ]]; then
             local printer_info
             printer_info=$(lpstat -l -p "$printer" 2>/dev/null | grep -oP 'Description: \K.+' || echo "$printer")
-
             local printer_location
             printer_location=$(lpoptions -p "$printer" 2>/dev/null | grep -oP 'printer-location=\K[^,]+' || echo "")
 
             generate_airprint_service "$printer" "$printer_info" "$printer_location"
+        else
+            log_info "AirPrint service already exists for: $printer"
         fi
     done <<< "$printers"
+
+    # Remove stale service files for printers that no longer exist in CUPS
+    for existing_file in "$AVAHI_SERVICES_DIR"/AirPrint-*.service; do
+        [[ ! -f "$existing_file" ]] && continue
+        local basename
+        basename=$(basename "$existing_file")
+        local found=false
+        for expected in "${expected_files[@]}"; do
+            if [[ "$basename" == "$expected" ]]; then
+                found=true
+                break
+            fi
+        done
+        if [[ "$found" == "false" ]]; then
+            log_info "Removing stale AirPrint service: $basename"
+            rm -f "$existing_file"
+        fi
+    done
 }
 
-restart_avahi() {
-    log_info "Restarting Avahi daemon..."
+reload_avahi() {
+    # Avahi watches /etc/avahi/services/ for changes and auto-reloads.
+    # A SIGHUP ensures it picks up changes immediately.
+    log_info "Reloading Avahi daemon..."
 
-    systemctl restart avahi-daemon
+    if systemctl is-active avahi-daemon > /dev/null 2>&1; then
+        kill -HUP "$(pidof avahi-daemon 2>/dev/null | awk '{print $1}')" 2>/dev/null || \
+            systemctl reload avahi-daemon 2>/dev/null || \
+            systemctl restart avahi-daemon
+    else
+        systemctl start avahi-daemon
+    fi
 
-    sleep 2
+    sleep 1
 
     if systemctl is-active avahi-daemon > /dev/null 2>&1; then
         log_info "Avahi daemon is running"
     else
         log_warn "Avahi daemon may not have started correctly"
-        systemctl status avahi-daemon
     fi
 }
 
 verify_services() {
     log_info "Verifying published services..."
 
-    # List published services
     if command -v avahi-browse &> /dev/null; then
         log_info "Published AirPrint services:"
         avahi-browse -t _ipp._tcp 2>/dev/null || true
@@ -228,12 +253,20 @@ verify_services() {
 }
 
 main() {
+    # Acquire lock (non-blocking). If another instance is running, exit
+    # silently — it will pick up the same CUPS state.
+    exec 9>"$LOCK_FILE"
+    if ! flock -n 9; then
+        log_info "Another instance is already running, skipping."
+        exit 0
+    fi
+
     log_info "Starting Avahi configuration..."
 
     check_avahi_installed
     configure_avahi_daemon
-    create_airprint_services
-    restart_avahi
+    sync_airprint_services
+    reload_avahi
     verify_services
 
     log_info "Avahi configuration complete"
