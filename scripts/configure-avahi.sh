@@ -204,7 +204,7 @@ sync_airprint_services() {
         local printer_info
         printer_info=$(lpstat -l -p "$printer" 2>/dev/null | grep -oP 'Description: \K.+' || echo "$printer")
         local printer_location
-        printer_location=$(lpoptions -p "$printer" 2>/dev/null | grep -oP 'printer-location=\K[^,]+' || echo "")
+        printer_location=$(lpstat -l -p "$printer" 2>/dev/null | grep -oP 'Location:\s+\K.+' || echo "")
 
         generate_airprint_service "$printer" "$printer_info" "$printer_location"
     done <<< "$printers"
