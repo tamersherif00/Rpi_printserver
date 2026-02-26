@@ -41,28 +41,36 @@ configure_avahi_daemon() {
 
     AVAHI_CONFIG="/etc/avahi/avahi-daemon.conf"
 
-    # Helper: set a key=value in the config, adding it under [server] if absent
+    # Helper: set key=value under a specific section.
+    # Each key must go in its correct section per avahi-daemon.conf(5):
+    #   [server]  - use-ipv4, use-ipv6, ...
+    #   [publish] - disable-publishing, publish-addresses, publish-workstation, ...
     set_avahi_option() {
-        local key="$1"
-        local value="$2"
+        local section="$1"
+        local key="$2"
+        local value="$3"
         if grep -q "^${key}=" "$AVAHI_CONFIG"; then
+            # Key already exists somewhere - update it in place
             sed -i "s|^${key}=.*|${key}=${value}|" "$AVAHI_CONFIG"
         else
-            # Append under [server] section if it exists, else at end of file
-            if grep -q "^\[server\]" "$AVAHI_CONFIG"; then
-                sed -i "/^\[server\]/a ${key}=${value}" "$AVAHI_CONFIG"
+            # Add it directly after the section header
+            if grep -q "^\[${section}\]" "$AVAHI_CONFIG"; then
+                sed -i "/^\[${section}\]/a ${key}=${value}" "$AVAHI_CONFIG"
             else
-                echo "${key}=${value}" >> "$AVAHI_CONFIG"
+                # Section missing entirely - append section + key
+                printf '\n[%s]\n%s=%s\n' "$section" "$key" "$value" >> "$AVAHI_CONFIG"
             fi
         fi
     }
 
     # Ensure Avahi is configured for local network discovery
     if [[ -f "$AVAHI_CONFIG" ]]; then
-        set_avahi_option "use-ipv4" "yes"
-        set_avahi_option "disable-publishing" "no"
-        set_avahi_option "publish-workstation" "yes"
-        set_avahi_option "publish-addresses" "yes"
+        # [server] keys
+        set_avahi_option "server"  "use-ipv4"           "yes"
+        # [publish] keys
+        set_avahi_option "publish" "disable-publishing"  "no"
+        set_avahi_option "publish" "publish-workstation" "yes"
+        set_avahi_option "publish" "publish-addresses"   "yes"
 
         log_info "Avahi daemon configured"
     else
