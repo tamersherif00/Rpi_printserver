@@ -26,6 +26,7 @@ ExecStart=/opt/printserver/venv/bin/gunicorn \
     --keep-alive 5 \
     --max-requests 500 \
     --max-requests-jitter 50 \
+    --worker-tmp-dir /dev/shm \
     --access-logfile - \
     --error-logfile - \
     'web.app:create_app()'
@@ -40,9 +41,6 @@ StartLimitBurst=5
 # Timeouts
 TimeoutStartSec=30
 TimeoutStopSec=10
-
-# Watchdog: systemd kills service if unresponsive for 60s
-WatchdogSec=60
 
 # Security hardening
 NoNewPrivileges=true
