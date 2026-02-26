@@ -160,7 +160,7 @@ install_python_app() {
 
     # Copy and set up helper scripts
     mkdir -p "$INSTALL_DIR/scripts"
-    for script in set-hostname.sh restart-service.sh configure-avahi.sh enable-printers.sh; do
+    for script in set-hostname.sh restart-service.sh configure-avahi.sh enable-printers.sh configure-samba.sh; do
         if [[ -f "$SCRIPT_DIR/$script" ]]; then
             cp "$SCRIPT_DIR/$script" "$INSTALL_DIR/scripts/"
             chmod +x "$INSTALL_DIR/scripts/$script"
@@ -171,6 +171,12 @@ install_python_app() {
     mkdir -p "$INSTALL_DIR/config/avahi"
     if [[ -f "$PROJECT_DIR/config/avahi/airprint.service.template" ]]; then
         cp "$PROJECT_DIR/config/avahi/airprint.service.template" "$INSTALL_DIR/config/avahi/"
+    fi
+
+    # Copy Samba config (used by configure-samba.sh at runtime)
+    mkdir -p "$INSTALL_DIR/config/samba"
+    if [[ -f "$PROJECT_DIR/config/samba/smb.conf" ]]; then
+        cp "$PROJECT_DIR/config/samba/smb.conf" "$INSTALL_DIR/config/samba/"
     fi
 
     log_info "Python application installed"
@@ -226,6 +232,11 @@ EOF
 configure_cups() {
     log_info "Configuring CUPS..."
     bash "$SCRIPT_DIR/configure-cups.sh"
+}
+
+configure_samba() {
+    log_info "Configuring Samba for Windows printer sharing..."
+    bash "$SCRIPT_DIR/configure-samba.sh"
 }
 
 configure_avahi() {
@@ -360,6 +371,10 @@ restart_services() {
     systemctl restart avahi-daemon
     sleep 1
 
+    # Restart Samba to apply Windows sharing changes
+    systemctl restart smbd nmbd 2>/dev/null || true
+    sleep 1
+
     # Restart web interface to apply code updates
     systemctl restart printserver-web
     sleep 2
@@ -371,7 +386,7 @@ restart_services() {
         log_info "All services restarted successfully"
     else
         log_warn "Some services may not have started correctly. Check status with:"
-        log_warn "  systemctl status cups avahi-daemon printserver-web"
+        log_warn "  systemctl status cups avahi-daemon smbd printserver-web"
     fi
 
     # Verify web interface health
@@ -513,6 +528,7 @@ main() {
     configure_sudoers
     fix_hosts_file
     configure_cups
+    configure_samba
     install_udev_rules
     install_systemd_service
     configure_log_limits
