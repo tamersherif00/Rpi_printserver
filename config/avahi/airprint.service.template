@@ -58,12 +58,4 @@
     <txt-record>TLS=1.2</txt-record>
   </service>
 
-  <!-- Printer discovery via DNS-SD -->
-  <service>
-    <type>_printer._tcp</type>
-    <port>515</port>
-    <txt-record>txtvers=1</txt-record>
-    <txt-record>qtotal=1</txt-record>
-    <txt-record>ty={{PRINTER_INFO}}</txt-record>
-  </service>
 </service-group>
