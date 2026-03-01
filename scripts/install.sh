@@ -83,8 +83,10 @@ install_system_packages() {
         wireless-tools
 
     # wsdd (Web Services for Devices) enables Windows 10/11 auto-discovery.
-    # Available on newer Raspberry Pi OS; skip gracefully on older releases.
-    if apt-cache show wsdd > /dev/null 2>&1; then
+    # Available on some Raspberry Pi OS releases; skip gracefully when absent.
+    # Use Version: check because apt-cache show exits 0 for virtual/referenced
+    # packages that have no installation candidate (e.g. Debian Trixie).
+    if apt-cache show wsdd 2>/dev/null | grep -q "^Version:"; then
         apt-get install -y wsdd
     else
         log_warn "wsdd not available in this OS's package repos — Windows auto-discovery via WSD will not work. Use manual 'Add a printer' in Windows instead."
