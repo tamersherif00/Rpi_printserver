@@ -48,6 +48,7 @@ ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=true
 ReadWritePaths=/var/log/printserver
+RuntimeDirectory=printserver
 
 # Resource limits — tuned for 1GB Raspberry Pi
 # MemoryHigh: soft limit — kernel applies memory pressure (reclaim/throttle)
