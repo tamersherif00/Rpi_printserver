@@ -69,8 +69,15 @@ def _make_memory_watchdog(cache: dict) -> threading.Thread:
     CRITICAL_MB = 190       # clear cache above this (systemd kills at 256 MB)
 
     def _rss_mb() -> float:
-        # ru_maxrss is in kB on Linux
-        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+        # ru_maxrss returns the peak (maximum) RSS on Linux, not the current RSS.
+        # Read current RSS from /proc/self/statm: field[1] is RSS in 4096-byte pages.
+        try:
+            with open("/proc/self/statm") as f:
+                fields = f.read().split()
+                return int(fields[1]) * 4096 / (1024 * 1024)
+        except Exception:
+            # Fallback: ru_maxrss is in kB on Linux (peak, not current)
+            return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
 
     def _run():
         while True:

@@ -31,28 +31,32 @@ ALLOWED_RESTART_SERVICES = {"cups", "avahi-daemon", "printserver-web"}
 # Path to the restart helper script
 RESTART_SCRIPT = "/opt/printserver/scripts/restart-service.sh"
 
-# Simple TTL cache for expensive subprocess-heavy functions
-_cache: dict[str, tuple[float, Any]] = {}
+# Simple TTL cache for expensive subprocess-heavy functions.
+# Each entry stores (timestamp, value, ttl) so eviction uses each entry's
+# own TTL rather than the current caller's TTL.
+_cache: dict[str, tuple[float, Any, float]] = {}
 
 
 def _cached_call(key: str, fn, ttl_seconds: float):
     """Return cached result if fresh, otherwise call fn() and cache it.
 
-    Also evicts any fully-expired entries (older than 2× their TTL) to
+    Also evicts any fully-expired entries (older than 2× their own TTL) to
     prevent the cache dict from holding stale large dicts indefinitely.
+    Each entry's TTL is stored alongside its value so that eviction is based
+    on the entry's own TTL, not the current caller's TTL.
     """
     now = time.monotonic()
-    # Evict entries that are stale beyond 2× their TTL window
-    expired = [k for k, (t, _) in _cache.items() if now - t >= ttl_seconds * 2]
+    # Evict entries older than 2× their own stored TTL
+    expired = [k for k, (t, _, entry_ttl) in _cache.items() if now - t >= entry_ttl * 2]
     for k in expired:
         del _cache[k]
 
     if key in _cache:
-        cached_time, cached_value = _cache[key]
+        cached_time, cached_value, _ = _cache[key]
         if now - cached_time < ttl_seconds:
             return cached_value
     result = fn()
-    _cache[key] = (now, result)
+    _cache[key] = (now, result, ttl_seconds)
     return result
 
 
@@ -466,8 +470,8 @@ def register_routes(app: Flask) -> None:
 
         try:
             client = get_cups_client(app)
-            printers = get_all_printers(client)
-            jobs = get_all_jobs(client, which_jobs="all")
+            printers = _cached_call("printers_all", lambda: get_all_printers(client), 30)
+            jobs = _cached_call("jobs_all", lambda: get_all_jobs(client, which_jobs="all"), 30)
         except CupsClientError as e:
             cups_error = True
             printers = []

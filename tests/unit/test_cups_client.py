@@ -130,7 +130,7 @@ class TestCupsClient:
         result = client.cancel_job(1)
 
         assert result is True
-        mock_cups_connection.cancelJob.assert_called_once_with(1)
+        mock_cups_connection.cancelJob.assert_called_once_with(1, purge=False)
 
     def test_cancel_job_error(self):
         """Test cancel job error handling."""
