@@ -286,10 +286,14 @@ install_systemd_service() {
 configure_log_limits() {
     log_info "Configuring log retention limits..."
 
-    # journald: cap at 50M to prevent disk fill on small SD cards
+    # journald: enable persistent storage so logs survive reboots/freezes,
+    # then cap at 50M to prevent disk fill on small SD cards.
+    mkdir -p /var/log/journal
+    systemd-tmpfiles --create --prefix /var/log/journal 2>/dev/null || true
     mkdir -p /etc/systemd/journald.conf.d
     cat > /etc/systemd/journald.conf.d/printserver.conf << 'EOF'
 [Journal]
+Storage=persistent
 SystemMaxUse=50M
 RuntimeMaxUse=30M
 MaxRetentionSec=7day
