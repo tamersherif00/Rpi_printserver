@@ -66,11 +66,11 @@ install_system_packages() {
     log_info "Updating package lists..."
     apt-get update
 
+    # ── Mandatory packages ────────────────────────────────────────────────────
+    # These are required for the print server to function; exit on failure.
     log_info "Installing required packages..."
     apt-get install -y \
         cups \
-        cups-filters \
-        cups-browsed \
         cups-bsd \
         avahi-daemon \
         avahi-utils \
@@ -78,71 +78,75 @@ install_system_packages() {
         python3-pip \
         python3-venv \
         python3-cups \
-        libcups2-dev \
         samba \
         wireless-tools
 
-    # wsdd (Web Services for Devices) enables Windows 10/11 auto-discovery.
+    # ── Optional system packages ──────────────────────────────────────────────
+    # Package names and availability vary across Debian/Raspbian releases
+    # (e.g. cups-browsed was split from cups-filters in Debian Trixie+).
+    # Install each individually so a missing package doesn't abort the script.
+    for pkg in cups-filters cups-browsed libcups2-dev; do
+        if apt-get install -y "$pkg" 2>/dev/null; then
+            log_info "  installed: $pkg"
+        else
+            log_warn "$pkg not available in current repos — skipping (non-fatal)"
+        fi
+    done
+
+    # ── wsdd: Windows 10/11 auto-discovery via WS-Discovery ──────────────────
     # Strategy:
-    #   1. Try apt (works on Bookworm after apt-get update, and on Bullseye).
-    #   2. Fall back to an isolated venv install (safe on PEP 668 / Bookworm
-    #      where bare `pip3 install` is blocked system-wide).
-    #   3. Warn and give manual-add instructions if both fail.
+    #   1. Try apt  (available on Bullseye/Bookworm; removed from Trixie+).
+    #   2. Download the standalone Python script from the upstream GitHub repo.
+    #      wsdd is NOT published to PyPI — pip install wsdd will always fail.
+    #   3. Warn and provide manual-add instructions if both methods fail.
     if apt-get install -y wsdd 2>/dev/null; then
         log_info "wsdd installed from apt"
     else
-        log_info "apt wsdd unavailable — installing into isolated venv at /opt/wsdd-venv"
-        python3 -m venv /opt/wsdd-venv
-        /opt/wsdd-venv/bin/pip install --quiet wsdd
-        WSDD_BIN="/opt/wsdd-venv/bin/wsdd"
+        log_info "apt wsdd unavailable — downloading from GitHub (christgau/wsdd)..."
+        WSDD_BIN="/usr/local/bin/wsdd"
+        if wget -q -O "$WSDD_BIN" \
+               "https://raw.githubusercontent.com/christgau/wsdd/master/src/wsdd.py" \
+            && chmod +x "$WSDD_BIN"; then
 
-        # Create a systemd unit pointing at the venv binary.
-        cat > /etc/systemd/system/wsdd.service << EOF
+            # Only write the unit file if apt didn't already install one.
+            if [[ ! -f /lib/systemd/system/wsdd.service ]] && \
+               [[ ! -f /usr/lib/systemd/system/wsdd.service ]]; then
+                cat > /etc/systemd/system/wsdd.service << 'WSDD_EOF'
 [Unit]
 Description=Web Services Dynamic Discovery Daemon
-Documentation=man:wsdd(8)
+Documentation=https://github.com/christgau/wsdd
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=${WSDD_BIN}
+ExecStart=/usr/local/bin/wsdd
 Restart=on-failure
 RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
-EOF
-        systemctl daemon-reload
-        if /opt/wsdd-venv/bin/wsdd --version > /dev/null 2>&1; then
-            log_info "wsdd installed via venv, systemd unit created"
+WSDD_EOF
+                systemctl daemon-reload
+            fi
+            log_info "wsdd installed from GitHub, systemd unit created"
         else
-            log_warn "wsdd venv install may have failed — check /opt/wsdd-venv"
+            log_warn "wsdd could not be installed (apt unavailable, GitHub download failed)."
             log_warn "Windows auto-discovery via WSD will not work automatically."
             log_warn "Windows users can still add the printer manually:"
-            log_warn "  Option 1 (SMB):  Open File Explorer → \\\\$(hostname) → double-click the printer"
-            log_warn "  Option 2 (IPP):  Windows Settings → Printers → 'Add a printer' → enter:"
-            log_warn "             http://$(hostname -I | awk '{print \$1}'):631/printers/<PrinterName>"
+            log_warn "  SMB path: \\\\$(hostname)\\<PrinterName>"
+            log_warn "  IPP URL:  http://$(hostname -I | awk '{print \$1}'):631/printers/<PrinterName>"
         fi
     fi
 
-    # Install Brother printer drivers
-    log_info "Installing Brother printer drivers..."
-
-    # brlaser - open source driver for many Brother laser printers
-    if apt-cache show printer-driver-brlaser > /dev/null 2>&1; then
-        apt-get install -y printer-driver-brlaser
-        log_info "Installed brlaser driver (HL-L2300, HL-L2340, HL-L2360, DCP-L2500, etc.)"
-    fi
-
-    # Brother's official CUPS wrapper (for inkjet and some lasers)
-    if apt-cache show printer-driver-cups-pdf > /dev/null 2>&1; then
-        apt-get install -y printer-driver-cups-pdf
-    fi
-
-    # Gutenprint - additional printer support
-    if apt-cache show printer-driver-gutenprint > /dev/null 2>&1; then
-        apt-get install -y printer-driver-gutenprint
-    fi
+    # ── Optional printer drivers ──────────────────────────────────────────────
+    log_info "Installing printer drivers (where available)..."
+    for pkg in printer-driver-brlaser printer-driver-cups-pdf printer-driver-gutenprint; do
+        if apt-cache show "$pkg" > /dev/null 2>&1; then
+            apt-get install -y "$pkg" && log_info "  installed: $pkg"
+        else
+            log_warn "  $pkg not available in current repos — skipping"
+        fi
+    done
 
     # Add user to lpadmin group for CUPS administration
     if [[ -n "$ACTUAL_USER" ]] && [[ "$ACTUAL_USER" != "root" ]]; then
