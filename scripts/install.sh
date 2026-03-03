@@ -83,13 +83,42 @@ install_system_packages() {
         wireless-tools
 
     # wsdd (Web Services for Devices) enables Windows 10/11 auto-discovery.
-    # Available on some Raspberry Pi OS releases; skip gracefully when absent.
-    # Use Version: check because apt-cache show exits 0 for virtual/referenced
-    # packages that have no installation candidate (e.g. Debian Trixie).
+    # Try apt package first; fall back to the PyPI package so that older
+    # Raspberry Pi OS releases (Buster) still get WSD support.
     if apt-cache show wsdd 2>/dev/null | grep -q "^Version:"; then
         apt-get install -y wsdd
+        log_info "wsdd installed from apt"
+    elif pip3 install wsdd > /dev/null 2>&1; then
+        WSDD_BIN=$(python3 -c "import shutil; print(shutil.which('wsdd') or '')" 2>/dev/null || true)
+        if [[ -z "$WSDD_BIN" ]]; then
+            WSDD_BIN=$(pip3 show wsdd 2>/dev/null | awk '/^Location:/{print $2"/wsdd""/wsdd"}' | head -1 || true)
+            WSDD_BIN="/usr/local/bin/wsdd"
+        fi
+        # Create a minimal systemd unit so the OS can manage it like the apt version.
+        cat > /etc/systemd/system/wsdd.service << EOF
+[Unit]
+Description=Web Services Dynamic Discovery Daemon
+Documentation=man:wsdd(8)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=${WSDD_BIN}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        systemctl daemon-reload
+        log_info "wsdd installed via pip and systemd unit created at /etc/systemd/system/wsdd.service"
     else
-        log_warn "wsdd not available in this OS's package repos — Windows auto-discovery via WSD will not work. Use manual 'Add a printer' in Windows instead."
+        log_warn "wsdd could not be installed (neither apt nor pip succeeded)."
+        log_warn "Windows auto-discovery via WSD will not work automatically."
+        log_warn "Windows users can still add the printer manually:"
+        log_warn "  Option 1 (SMB):  Open File Explorer → \\\\$(hostname) → double-click the printer"
+        log_warn "  Option 2 (IPP):  Windows Settings → Printers → 'Add a printer' → enter:"
+        log_warn "             http://$(hostname -I | awk '{print \$1}'):631/printers/<PrinterName>"
     fi
 
     # Install Brother printer drivers

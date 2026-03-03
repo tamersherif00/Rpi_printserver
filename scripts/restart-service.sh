@@ -14,7 +14,7 @@ if [[ -z "$SERVICE" ]]; then
 fi
 
 # Whitelist of allowed services
-ALLOWED_SERVICES=("cups" "avahi-daemon" "printserver-web")
+ALLOWED_SERVICES=("cups" "avahi-daemon" "printserver-web" "smbd" "wsdd")
 
 VALID=false
 for allowed in "${ALLOWED_SERVICES[@]}"; do

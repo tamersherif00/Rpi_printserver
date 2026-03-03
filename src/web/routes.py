@@ -23,10 +23,10 @@ from printserver.system_utils import (
 logger = logging.getLogger(__name__)
 
 # Allowed services for log viewing (whitelist to prevent command injection)
-ALLOWED_LOG_SERVICES = {"printserver-web", "cups", "avahi-daemon", "app", "cups-error"}
+ALLOWED_LOG_SERVICES = {"printserver-web", "cups", "avahi-daemon", "app", "cups-error", "smbd", "wsdd"}
 
 # Allowed services for restart (whitelist to prevent arbitrary service control)
-ALLOWED_RESTART_SERVICES = {"cups", "avahi-daemon", "printserver-web"}
+ALLOWED_RESTART_SERVICES = {"cups", "avahi-daemon", "printserver-web", "smbd", "wsdd"}
 
 # Path to the restart helper script
 RESTART_SCRIPT = "/opt/printserver/scripts/restart-service.sh"
@@ -252,6 +252,9 @@ def _get_system_diagnostics() -> dict[str, Any]:
         "cups": _get_service_status("cups"),
         "avahi": _get_service_status("avahi-daemon"),
         "printserver": _get_service_status("printserver-web"),
+        # Windows discovery services: smbd (SMB/Samba) and wsdd (WSD auto-discovery)
+        "samba": _get_service_status("smbd"),
+        "wsdd": _get_service_status("wsdd"),
     }
 
     # CUPS connectivity
