@@ -297,6 +297,10 @@ Storage=persistent
 SystemMaxUse=50M
 RuntimeMaxUse=30M
 MaxRetentionSec=7day
+# Flush RAM buffer to disk every 30s instead of the default 5 minutes.
+# The Python app also writes directly to /var/log/printserver/app.log
+# (flushed per-line), so this is a secondary safety net for other services.
+SyncIntervalSec=30s
 EOF
     systemctl restart systemd-journald 2>/dev/null || true
 
@@ -309,6 +313,21 @@ EOF
     delaycompress
     missingok
     notifempty
+}
+EOF
+
+    # Printserver app.log rotation (Python RotatingFileHandler also rotates at
+    # 5 MB, but logrotate provides a system-level safety net and ensures
+    # old backups are cleaned up even if the service isn't running).
+    cat > /etc/logrotate.d/printserver-app << 'EOF'
+/var/log/printserver/app.log {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
 }
 EOF
 
