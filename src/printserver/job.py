@@ -173,16 +173,19 @@ def get_all_jobs(
     cups_client: CupsClient,
     which_jobs: str = "all",
     printer_name: Optional[str] = None,
+    limit: Optional[int] = None,
 ) -> list[PrintJob]:
-    """Get all print jobs from CUPS.
+    """Get print jobs from CUPS.
 
     Args:
         cups_client: Connected CUPS client.
         which_jobs: Filter type: 'all', 'completed', 'not-completed'.
         printer_name: Filter by printer name (optional).
+        limit: Maximum number of jobs to return after sorting (optional).
+               Avoids holding a large list in memory when only a slice is needed.
 
     Returns:
-        List of PrintJob instances.
+        List of PrintJob instances, newest first.
     """
     jobs_data = cups_client.get_jobs(which_jobs=which_jobs)
     jobs = [PrintJob.from_cups_data(job_id, data) for job_id, data in jobs_data.items()]
@@ -193,6 +196,9 @@ def get_all_jobs(
 
     # Sort by creation time (newest first)
     jobs.sort(key=lambda j: j.created_at or datetime.min, reverse=True)
+
+    if limit is not None:
+        jobs = jobs[:limit]
 
     return jobs
 

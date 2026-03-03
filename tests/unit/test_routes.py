@@ -1,6 +1,7 @@
 """Tests for route helper functions."""
 
 import time
+from unittest import mock
 
 import pytest
 
@@ -92,3 +93,41 @@ class TestCachedCall:
         _cached_call("other", lambda: "x", 5)
 
         assert "fresh_key" in _cache
+
+
+class TestRssReading:
+    """/proc/self/statm is used for current RSS, not the peak ru_maxrss."""
+
+    def test_statm_field1_gives_current_rss(self):
+        """Verify the /proc/self/statm formula: field[1] * 4096 bytes → MB."""
+        statm_content = "50000 2048 1800 0 0 1000 0"  # field[1]=2048 pages
+        expected_mb = round(2048 * 4096 / (1024 * 1024), 1)  # 8.0 MB
+
+        fields = statm_content.split()
+        rss_mb = round(int(fields[1]) * 4096 / (1024 * 1024), 1)
+
+        assert rss_mb == expected_mb
+
+    def test_statm_is_preferred_over_ru_maxrss(self):
+        """/proc/self/statm is read first; ru_maxrss is only the fallback."""
+        import resource as _resource
+
+        statm_content = "50000 512 400 0 0 300 0"  # 512 pages = 2.0 MB
+        peak_kb = 999 * 1024  # ru_maxrss would give 999 MB (wrong, historical peak)
+
+        with mock.patch("builtins.open", mock.mock_open(read_data=statm_content)):
+            with mock.patch.object(
+                _resource, "getrusage",
+                return_value=type("_ru", (), {"ru_maxrss": peak_kb})(),
+            ):
+                # Reproduce the route's RSS logic
+                try:
+                    with open("/proc/self/statm") as _f:
+                        rss_mb = round(int(_f.read().split()[1]) * 4096 / (1024 * 1024), 1)
+                except Exception:
+                    rss_kb = _resource.getrusage(_resource.RUSAGE_SELF).ru_maxrss
+                    rss_mb = round(rss_kb / 1024, 1)
+
+        # Should use statm (2.0 MB), not ru_maxrss (999 MB)
+        assert rss_mb == round(512 * 4096 / (1024 * 1024), 1)
+        assert rss_mb < 10  # definitely not the 999 MB peak

@@ -471,7 +471,13 @@ def register_routes(app: Flask) -> None:
         try:
             client = get_cups_client(app)
             printers = _cached_call("printers_all", lambda: get_all_printers(client), 30)
-            jobs = _cached_call("jobs_all", lambda: get_all_jobs(client, which_jobs="all"), 30)
+            # Use "not-completed" to avoid caching the full CUPS job history
+            # (which can be 500+ objects). Status only needs active/pending counts.
+            jobs = _cached_call(
+                "jobs_active",
+                lambda: get_all_jobs(client, which_jobs="not-completed"),
+                30,
+            )
         except CupsClientError as e:
             cups_error = True
             printers = []
@@ -557,8 +563,7 @@ def register_routes(app: Flask) -> None:
             else:
                 which_jobs = "all"
 
-            jobs = get_all_jobs(client, which_jobs=which_jobs)
-            jobs = jobs[:limit]
+            jobs = get_all_jobs(client, which_jobs=which_jobs, limit=limit)
 
             return jsonify([j.to_dict() for j in jobs])
         except CupsClientError as e:
@@ -689,9 +694,16 @@ def register_routes(app: Flask) -> None:
         import gc as _gc
         import resource as _resource
 
-        # Process RSS (ru_maxrss is kB on Linux)
-        rss_kb = _resource.getrusage(_resource.RUSAGE_SELF).ru_maxrss
-        rss_mb = round(rss_kb / 1024, 1)
+        # Current process RSS: read from /proc/self/statm (field[1] = RSS pages).
+        # ru_maxrss on Linux returns the historical PEAK, not the current RSS,
+        # so it never decreases and gives operators a false picture.
+        try:
+            with open("/proc/self/statm") as _f:
+                rss_mb = round(int(_f.read().split()[1]) * 4096 / (1024 * 1024), 1)
+        except Exception:
+            # Fallback to peak RSS if /proc is unavailable (e.g. macOS dev box)
+            rss_kb = _resource.getrusage(_resource.RUSAGE_SELF).ru_maxrss
+            rss_mb = round(rss_kb / 1024, 1)
 
         # System-wide memory from /proc/meminfo
         sys_mem: dict[str, int] = {}

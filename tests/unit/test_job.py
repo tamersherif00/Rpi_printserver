@@ -197,6 +197,42 @@ class TestJobFunctions:
 
         assert len(jobs) == 0
 
+    def test_get_all_jobs_limit(self):
+        """Test limit caps the returned list and releases excess objects."""
+        mock_client = MagicMock()
+        mock_client.get_jobs.return_value = {
+            1: {"job-name": "Doc1", "job-state": 3, "time-at-creation": 1702900000},
+            2: {"job-name": "Doc2", "job-state": 9, "time-at-creation": 1702900100},
+            3: {"job-name": "Doc3", "job-state": 9, "time-at-creation": 1702900200},
+        }
+
+        jobs = get_all_jobs(mock_client, limit=2)
+
+        assert len(jobs) == 2
+
+    def test_get_all_jobs_limit_none_returns_all(self):
+        """Test limit=None (default) returns all jobs."""
+        mock_client = MagicMock()
+        mock_client.get_jobs.return_value = {
+            1: {"job-name": "Doc1", "job-state": 3, "time-at-creation": 1702900000},
+            2: {"job-name": "Doc2", "job-state": 9, "time-at-creation": 1702900100},
+        }
+
+        jobs = get_all_jobs(mock_client, limit=None)
+
+        assert len(jobs) == 2
+
+    def test_get_all_jobs_limit_larger_than_results(self):
+        """Test limit larger than result count returns all jobs."""
+        mock_client = MagicMock()
+        mock_client.get_jobs.return_value = {
+            1: {"job-name": "Doc1", "job-state": 3, "time-at-creation": 1702900000},
+        }
+
+        jobs = get_all_jobs(mock_client, limit=50)
+
+        assert len(jobs) == 1
+
     def test_get_job_found(self):
         """Test getting a specific job."""
         mock_client = MagicMock()
