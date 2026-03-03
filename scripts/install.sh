@@ -83,18 +83,20 @@ install_system_packages() {
         wireless-tools
 
     # wsdd (Web Services for Devices) enables Windows 10/11 auto-discovery.
-    # Try apt package first; fall back to the PyPI package so that older
-    # Raspberry Pi OS releases (Buster) still get WSD support.
-    if apt-cache show wsdd 2>/dev/null | grep -q "^Version:"; then
-        apt-get install -y wsdd
+    # Strategy:
+    #   1. Try apt (works on Bookworm after apt-get update, and on Bullseye).
+    #   2. Fall back to an isolated venv install (safe on PEP 668 / Bookworm
+    #      where bare `pip3 install` is blocked system-wide).
+    #   3. Warn and give manual-add instructions if both fail.
+    if apt-get install -y wsdd 2>/dev/null; then
         log_info "wsdd installed from apt"
-    elif pip3 install wsdd > /dev/null 2>&1; then
-        WSDD_BIN=$(python3 -c "import shutil; print(shutil.which('wsdd') or '')" 2>/dev/null || true)
-        if [[ -z "$WSDD_BIN" ]]; then
-            WSDD_BIN=$(pip3 show wsdd 2>/dev/null | awk '/^Location:/{print $2"/wsdd""/wsdd"}' | head -1 || true)
-            WSDD_BIN="/usr/local/bin/wsdd"
-        fi
-        # Create a minimal systemd unit so the OS can manage it like the apt version.
+    else
+        log_info "apt wsdd unavailable — installing into isolated venv at /opt/wsdd-venv"
+        python3 -m venv /opt/wsdd-venv
+        /opt/wsdd-venv/bin/pip install --quiet wsdd
+        WSDD_BIN="/opt/wsdd-venv/bin/wsdd"
+
+        # Create a systemd unit pointing at the venv binary.
         cat > /etc/systemd/system/wsdd.service << EOF
 [Unit]
 Description=Web Services Dynamic Discovery Daemon
@@ -111,14 +113,16 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
         systemctl daemon-reload
-        log_info "wsdd installed via pip and systemd unit created at /etc/systemd/system/wsdd.service"
-    else
-        log_warn "wsdd could not be installed (neither apt nor pip succeeded)."
-        log_warn "Windows auto-discovery via WSD will not work automatically."
-        log_warn "Windows users can still add the printer manually:"
-        log_warn "  Option 1 (SMB):  Open File Explorer → \\\\$(hostname) → double-click the printer"
-        log_warn "  Option 2 (IPP):  Windows Settings → Printers → 'Add a printer' → enter:"
-        log_warn "             http://$(hostname -I | awk '{print \$1}'):631/printers/<PrinterName>"
+        if /opt/wsdd-venv/bin/wsdd --version > /dev/null 2>&1; then
+            log_info "wsdd installed via venv, systemd unit created"
+        else
+            log_warn "wsdd venv install may have failed — check /opt/wsdd-venv"
+            log_warn "Windows auto-discovery via WSD will not work automatically."
+            log_warn "Windows users can still add the printer manually:"
+            log_warn "  Option 1 (SMB):  Open File Explorer → \\\\$(hostname) → double-click the printer"
+            log_warn "  Option 2 (IPP):  Windows Settings → Printers → 'Add a printer' → enter:"
+            log_warn "             http://$(hostname -I | awk '{print \$1}'):631/printers/<PrinterName>"
+        fi
     fi
 
     # Install Brother printer drivers
