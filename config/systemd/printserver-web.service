@@ -47,7 +47,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=true
-ReadWritePaths=/var/log/printserver
+ReadWritePaths=/var/log/printserver /var/lib/printserver
 RuntimeDirectory=printserver
 
 # Resource limits — tuned for 1GB Raspberry Pi

@@ -19,6 +19,13 @@ from printserver.system_utils import (
     requires_root,
     SystemUtilsError,
 )
+from printserver.wol import (
+    list_devices as list_wol_devices,
+    add_device as add_wol_device,
+    remove_device as remove_wol_device,
+    send_magic_packet,
+    normalise_mac,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1036,5 +1043,62 @@ def register_routes(app: Flask) -> None:
             })
         except CupsClientError as e:
             return jsonify({"error": str(e), "code": "CUPS_ERROR"}), 500
+
+    # ── Wake-on-LAN ───────────────────────────────────────────────────────────
+
+    @app.route("/wol")
+    def wol():
+        """Wake-on-LAN page — manage and wake saved devices."""
+        return render_template("wol.html", devices=list_wol_devices())
+
+    @app.route("/api/wol/devices", methods=["GET"])
+    def api_wol_devices_list():
+        """Return all saved WOL devices."""
+        return jsonify(list_wol_devices())
+
+    @app.route("/api/wol/devices", methods=["POST"])
+    def api_wol_devices_add():
+        """Save a new WOL device. Body: {name, mac, ip?}"""
+        data = request.get_json(silent=True) or {}
+        name = str(data.get("name", "")).strip()
+        mac  = str(data.get("mac",  "")).strip()
+        ip   = str(data.get("ip",   "")).strip()
+
+        if not name or not mac:
+            return jsonify({"error": "name and mac are required"}), 400
+        try:
+            device = add_wol_device(name, mac, ip)
+            return jsonify(device), 201
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        except OSError as exc:
+            logger.error("Could not write WOL devices file: %s", exc)
+            return jsonify({"error": "Could not save device (storage error)"}), 500
+
+    @app.route("/api/wol/devices/<device_id>", methods=["DELETE"])
+    def api_wol_devices_delete(device_id: str):
+        """Remove a saved WOL device by ID."""
+        removed = remove_wol_device(device_id)
+        if not removed:
+            return jsonify({"error": "Device not found"}), 404
+        return jsonify({"ok": True})
+
+    @app.route("/api/wol/wake", methods=["POST"])
+    def api_wol_wake():
+        """Send a WOL magic packet. Body: {mac, broadcast?}"""
+        data = request.get_json(silent=True) or {}
+        mac       = str(data.get("mac",       "")).strip()
+        broadcast = str(data.get("broadcast", "255.255.255.255")).strip()
+
+        if not mac:
+            return jsonify({"error": "mac is required"}), 400
+        try:
+            send_magic_packet(mac, broadcast)
+            return jsonify({"ok": True, "mac": normalise_mac(mac)})
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        except OSError as exc:
+            logger.error("WOL socket error: %s", exc)
+            return jsonify({"error": f"Socket error: {exc}"}), 500
 
     logger.info("Routes registered")

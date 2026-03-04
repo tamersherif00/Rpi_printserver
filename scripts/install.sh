@@ -208,6 +208,7 @@ create_directories() {
     mkdir -p "$INSTALL_DIR"
     mkdir -p "$CONFIG_DIR"
     mkdir -p /var/log/printserver
+    mkdir -p /var/lib/printserver   # WOL device store (wol_devices.json)
 
     chown -R root:root "$INSTALL_DIR"
     chmod 755 "$INSTALL_DIR"
