@@ -1,45 +1,28 @@
-# udev rules for USB printer hotplug detection
-# These rules trigger actions when USB printers are connected/disconnected
+# udev rules for USB printer hotplug
+# /etc/udev/rules.d/99-printer.rules
+#
+# On connect:  hotplug-printer.sh add
+#   → restarts CUPS, waits for the scheduler, auto-adds the printer queue,
+#     enables job acceptance, marks as shared, then refreshes Avahi (mDNS).
+#   → Windows 10/11, iOS and Android discover the printer automatically once
+#     Avahi broadcasts the IPP/dnssd record.
+#
+# On disconnect: hotplug-printer.sh remove
+#   → CUPS queue is preserved so queued jobs survive a cable reconnect.
+#     Avahi is refreshed to remove stale mDNS advertisements.
 
-# Rule for USB printer connection - trigger CUPS reload
-# This works for most USB printers identified by bInterfaceClass=7 (printer)
+# Restart CUPS immediately so it can re-enumerate the USB device tree.
+# hotplug-printer.sh then waits for the scheduler before doing lpadmin work.
 SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", ACTION=="add", \
-    RUN+="/bin/systemctl restart cups.service", \
-    RUN+="/usr/bin/logger -t printer-hotplug 'USB printer connected, restarting CUPS'"
-
-# Rule for USB printer disconnection - regenerate Avahi services to remove stale entries
-SUBSYSTEM=="usb", ACTION=="remove", ENV{ID_USB_INTERFACES}=="*:070102:*", \
-    RUN+="/usr/bin/logger -t printer-hotplug 'USB printer disconnected'", \
-    RUN+="/bin/bash -c 'sleep 5 && /opt/printserver/scripts/configure-avahi.sh &'"
-
-# Brother specific rules (common Brother USB vendor ID: 04f9)
-SUBSYSTEM=="usb", ATTR{idVendor}=="04f9", ACTION=="add", \
-    RUN+="/bin/systemctl restart cups.service", \
-    RUN+="/usr/bin/logger -t printer-hotplug 'Brother printer connected'"
-
-# HP specific rules (HP USB vendor ID: 03f0)
-SUBSYSTEM=="usb", ATTR{idVendor}=="03f0", ACTION=="add", \
-    RUN+="/bin/systemctl restart cups.service", \
-    RUN+="/usr/bin/logger -t printer-hotplug 'HP printer connected'"
-
-# Canon specific rules (Canon USB vendor ID: 04a9)
-SUBSYSTEM=="usb", ATTR{idVendor}=="04a9", ACTION=="add", \
-    RUN+="/bin/systemctl restart cups.service", \
-    RUN+="/usr/bin/logger -t printer-hotplug 'Canon printer connected'"
-
-# Epson specific rules (Epson USB vendor ID: 04b8)
-SUBSYSTEM=="usb", ATTR{idVendor}=="04b8", ACTION=="add", \
-    RUN+="/bin/systemctl restart cups.service", \
-    RUN+="/usr/bin/logger -t printer-hotplug 'Epson printer connected'"
-
-# Generic USB printer - fallback rule using usblp module
-KERNEL=="lp[0-9]*", SUBSYSTEM=="usb", ACTION=="add", \
     RUN+="/bin/systemctl restart cups.service"
 
-# Set proper permissions for printer devices
-SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", MODE="0666"
-
-# Trigger Avahi to regenerate AirPrint services when printer is added
-# Delay gives CUPS time to restart and register the new printer
+# Run the full hotplug pipeline asynchronously (needs a live CUPS scheduler).
 SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", ACTION=="add", \
-    RUN+="/bin/bash -c 'sleep 10 && /opt/printserver/scripts/configure-avahi.sh &'"
+    RUN+="/bin/bash -c 'sleep 3 && /opt/printserver/scripts/hotplug-printer.sh add >> /var/log/printer-hotplug.log 2>&1 &'"
+
+# USB printer disconnect — ID_USB_INTERFACES survives after the class attr is gone.
+SUBSYSTEM=="usb", ENV{ID_USB_INTERFACES}=="*:070102:*", ACTION=="remove", \
+    RUN+="/bin/bash -c 'sleep 5 && /opt/printserver/scripts/hotplug-printer.sh remove >> /var/log/printer-hotplug.log 2>&1 &'"
+
+# Set read/write permissions on the raw USB device node for lp tools.
+SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", MODE="0666"

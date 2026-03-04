@@ -101,6 +101,24 @@ install_system_packages() {
     #   3. Warn and provide manual-add instructions if both methods fail.
     if apt-get install -y wsdd 2>/dev/null; then
         log_info "wsdd installed from apt"
+        # The apt package ships its own service file (ExecStart without -w).
+        # Add a drop-in that overrides ExecStart to include -w WORKGROUP so
+        # Windows places the device in the right network group for discovery.
+        local apt_svc=""
+        for f in /lib/systemd/system/wsdd.service /usr/lib/systemd/system/wsdd.service; do
+            [[ -f "$f" ]] && { apt_svc="$f"; break; }
+        done
+        if [[ -n "$apt_svc" ]]; then
+            local wsdd_bin
+            wsdd_bin=$(grep "^ExecStart=" "$apt_svc" | head -1 | sed 's/ExecStart=//' | awk '{print $1}')
+            if [[ -n "$wsdd_bin" ]]; then
+                mkdir -p /etc/systemd/system/wsdd.service.d
+                printf '[Service]\nExecStart=\nExecStart=%s -w WORKGROUP\n' "$wsdd_bin" \
+                    > /etc/systemd/system/wsdd.service.d/printserver.conf
+                systemctl daemon-reload
+                log_info "wsdd: applied -w WORKGROUP via systemd drop-in"
+            fi
+        fi
     else
         log_info "apt wsdd unavailable — downloading from GitHub (christgau/wsdd)..."
         WSDD_BIN="/usr/local/bin/wsdd"
@@ -210,7 +228,7 @@ install_python_app() {
 
     # Copy and set up helper scripts
     mkdir -p "$INSTALL_DIR/scripts"
-    for script in set-hostname.sh restart-service.sh configure-avahi.sh enable-printers.sh configure-samba.sh; do
+    for script in set-hostname.sh restart-service.sh configure-avahi.sh enable-printers.sh configure-samba.sh hotplug-printer.sh; do
         if [[ -f "$SCRIPT_DIR/$script" ]]; then
             cp "$SCRIPT_DIR/$script" "$INSTALL_DIR/scripts/"
             chmod +x "$INSTALL_DIR/scripts/$script"
