@@ -119,7 +119,9 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=/usr/local/bin/wsdd
+# -w WORKGROUP  must match the workgroup in smb.conf so Windows places
+#               the device in the right network group for discovery.
+ExecStart=/usr/local/bin/wsdd -w WORKGROUP
 Restart=on-failure
 RestartSec=5
 
