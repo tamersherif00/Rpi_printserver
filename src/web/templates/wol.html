@@ -25,7 +25,11 @@
                             </h6>
                             <div class="d-flex gap-1">
                                 <button class="btn btn-sm btn-outline-secondary border-0 p-1"
-                                        onclick="openEditModal('{{ dev.id }}', {{ dev.name | tojson }}, {{ dev.mac | tojson }}, {{ dev.ip | tojson }})"
+                                        data-id="{{ dev.id }}"
+                                        data-name="{{ dev.name | e }}"
+                                        data-mac="{{ dev.mac | e }}"
+                                        data-ip="{{ dev.ip | e }}"
+                                        onclick="openEditModal(this)"
                                         title="Edit">
                                     <i class="bi bi-pencil"></i>
                                 </button>
@@ -39,7 +43,9 @@
                         <small class="text-muted font-monospace mb-1">{{ dev.mac | e }}</small>
                         <small class="text-muted mb-3">{{ dev.ip if dev.ip else '\u00a0' }}</small>
                         <button class="btn btn-success mt-auto"
-                                onclick="wakeDevice('{{ dev.mac | e }}', '{{ dev.name | e }}')"
+                                data-mac="{{ dev.mac | e }}"
+                                data-name="{{ dev.name | e }}"
+                                onclick="wakeDevice(this)"
                                 id="wake-{{ dev.id }}">
                             <i class="bi bi-lightning-charge-fill"></i> Wake
                         </button>
@@ -160,8 +166,9 @@
 <script>
 // ── Wake helpers ──────────────────────────────────────────────────────────────
 
-async function wakeDevice(mac, name) {
-    const btn = event.currentTarget;
+async function wakeDevice(btn) {
+    const mac  = btn.dataset.mac;
+    const name = btn.dataset.name;
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
 
@@ -255,11 +262,11 @@ async function saveDevice() {
 
 // ── Edit device ───────────────────────────────────────────────────────────────
 
-function openEditModal(id, name, mac, ip) {
-    document.getElementById('edit-dev-id').value   = id;
-    document.getElementById('edit-dev-name').value = name;
-    document.getElementById('edit-dev-mac').value  = mac;
-    document.getElementById('edit-dev-ip').value   = ip || '';
+function openEditModal(btn) {
+    document.getElementById('edit-dev-id').value   = btn.dataset.id;
+    document.getElementById('edit-dev-name').value = btn.dataset.name;
+    document.getElementById('edit-dev-mac').value  = btn.dataset.mac;
+    document.getElementById('edit-dev-ip').value   = btn.dataset.ip || '';
     document.getElementById('edit-error').style.display = 'none';
     bootstrap.Modal.getOrCreateInstance(document.getElementById('editDeviceModal')).show();
 }
@@ -336,7 +343,11 @@ function deviceCardInner(dev) {
                     </h6>
                     <div class="d-flex gap-1">
                         <button class="btn btn-sm btn-outline-secondary border-0 p-1"
-                                onclick="openEditModal('${dev.id}', ${JSON.stringify(dev.name)}, ${JSON.stringify(dev.mac)}, ${JSON.stringify(dev.ip || '')})"
+                                data-id="${dev.id}"
+                                data-name="${escapeHtml(dev.name)}"
+                                data-mac="${escapeHtml(dev.mac)}"
+                                data-ip="${escapeHtml(dev.ip || '')}"
+                                onclick="openEditModal(this)"
                                 title="Edit">
                             <i class="bi bi-pencil"></i>
                         </button>
@@ -349,7 +360,9 @@ function deviceCardInner(dev) {
                 <small class="text-muted font-monospace mb-1">${escapeHtml(dev.mac)}</small>
                 <small class="text-muted mb-3">${dev.ip ? escapeHtml(dev.ip) : '\u00a0'}</small>
                 <button class="btn btn-success mt-auto"
-                        onclick="wakeDevice('${dev.mac}', '${escapeHtml(dev.name)}')"
+                        data-mac="${escapeHtml(dev.mac)}"
+                        data-name="${escapeHtml(dev.name)}"
+                        onclick="wakeDevice(this)"
                         id="wake-${dev.id}">
                     <i class="bi bi-lightning-charge-fill"></i> Wake
                 </button>
