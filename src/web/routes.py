@@ -22,6 +22,7 @@ from printserver.system_utils import (
 from printserver.wol import (
     list_devices as list_wol_devices,
     add_device as add_wol_device,
+    update_device as update_wol_device,
     remove_device as remove_wol_device,
     send_magic_packet,
     normalise_mac,
@@ -1069,6 +1070,25 @@ def register_routes(app: Flask) -> None:
         try:
             device = add_wol_device(name, mac, ip)
             return jsonify(device), 201
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        except OSError as exc:
+            logger.error("Could not write WOL devices file: %s", exc)
+            return jsonify({"error": "Could not save device (storage error)"}), 500
+
+    @app.route("/api/wol/devices/<device_id>", methods=["PUT"])
+    def api_wol_devices_update(device_id: str):
+        """Update a saved WOL device. Body: {name, mac, ip?}"""
+        data = request.get_json(silent=True) or {}
+        name = str(data.get("name", "")).strip()
+        mac  = str(data.get("mac",  "")).strip()
+        ip   = str(data.get("ip",   "")).strip()
+
+        if not name or not mac:
+            return jsonify({"error": "name and mac are required"}), 400
+        try:
+            device = update_wol_device(device_id, name, mac, ip)
+            return jsonify(device)
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
         except OSError as exc:

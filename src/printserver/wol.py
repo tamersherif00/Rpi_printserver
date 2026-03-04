@@ -101,6 +101,29 @@ def add_device(name: str, mac: str, ip: str = "") -> dict:
     return device
 
 
+def update_device(device_id: str, name: str, mac: str, ip: str = "") -> dict:
+    """Update an existing WOL device. Returns the updated entry.
+
+    Raises ValueError if the device is not found or fields are invalid.
+    """
+    name = name.strip()
+    ip = ip.strip()
+    if not name:
+        raise ValueError("Device name is required")
+    mac_norm = normalise_mac(mac)
+
+    devices = _load()
+    for dev in devices:
+        if dev["id"] == device_id:
+            dev["name"] = name
+            dev["mac"] = mac_norm
+            dev["ip"] = ip
+            _save(devices)
+            logger.info("WOL device updated: %s (%s)", name, mac_norm)
+            return dev
+    raise ValueError(f"Device not found: {device_id}")
+
+
 def remove_device(device_id: str) -> bool:
     """Delete the device with *device_id*. Returns True if it existed."""
     devices = _load()

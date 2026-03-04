@@ -23,18 +23,21 @@
                                 <i class="bi bi-pc-display text-primary me-1"></i>
                                 {{ dev.name | e }}
                             </h6>
-                            <button class="btn btn-sm btn-outline-danger border-0 p-1"
-                                    onclick="removeDevice('{{ dev.id }}')"
-                                    title="Remove">
-                                <i class="bi bi-x-lg"></i>
-                            </button>
+                            <div class="d-flex gap-1">
+                                <button class="btn btn-sm btn-outline-secondary border-0 p-1"
+                                        onclick="openEditModal('{{ dev.id }}', {{ dev.name | tojson }}, {{ dev.mac | tojson }}, {{ dev.ip | tojson }})"
+                                        title="Edit">
+                                    <i class="bi bi-pencil"></i>
+                                </button>
+                                <button class="btn btn-sm btn-outline-danger border-0 p-1"
+                                        onclick="removeDevice('{{ dev.id }}')"
+                                        title="Remove">
+                                    <i class="bi bi-x-lg"></i>
+                                </button>
+                            </div>
                         </div>
                         <small class="text-muted font-monospace mb-1">{{ dev.mac | e }}</small>
-                        {% if dev.ip %}
-                        <small class="text-muted mb-3">{{ dev.ip | e }}</small>
-                        {% else %}
-                        <small class="text-muted mb-3">&nbsp;</small>
-                        {% endif %}
+                        <small class="text-muted mb-3">{{ dev.ip if dev.ip else '\u00a0' }}</small>
                         <button class="btn btn-success mt-auto"
                                 onclick="wakeDevice('{{ dev.mac | e }}', '{{ dev.name | e }}')"
                                 id="wake-{{ dev.id }}">
@@ -114,6 +117,43 @@
         </div>
     </div>
 </div>
+
+<!-- Edit Device Modal -->
+<div class="modal fade" id="editDeviceModal" tabindex="-1" aria-labelledby="editDeviceModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="editDeviceModalLabel">
+                    <i class="bi bi-pencil-square"></i> Edit Device
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="edit-dev-id">
+                <div class="mb-3">
+                    <label for="edit-dev-name" class="form-label">Name <span class="text-danger">*</span></label>
+                    <input type="text" id="edit-dev-name" class="form-control" maxlength="64" autocomplete="off">
+                </div>
+                <div class="mb-3">
+                    <label for="edit-dev-mac" class="form-label">MAC Address <span class="text-danger">*</span></label>
+                    <input type="text" id="edit-dev-mac" class="form-control font-monospace" maxlength="17" autocomplete="off">
+                    <div class="form-text">Accepts colons, hyphens, dots, or no delimiter.</div>
+                </div>
+                <div class="mb-3">
+                    <label for="edit-dev-ip" class="form-label">IP Address <span class="text-muted">(optional, for reference)</span></label>
+                    <input type="text" id="edit-dev-ip" class="form-control" maxlength="39" autocomplete="off">
+                </div>
+                <div id="edit-error" class="alert alert-danger py-2" style="display:none;"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="submitEdit()" id="edit-btn">
+                    <i class="bi bi-floppy"></i> Save Changes
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -121,8 +161,9 @@
 // ── Wake helpers ──────────────────────────────────────────────────────────────
 
 async function wakeDevice(mac, name) {
-    const btn = document.querySelector(`button[onclick="wakeDevice('${mac}', '${name}')"]`);
-    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>'; }
+    const btn = event.currentTarget;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
 
     try {
         const r = await fetch('/api/wol/wake', {
@@ -139,7 +180,8 @@ async function wakeDevice(mac, name) {
     } catch {
         showToast('Network error — could not send packet', 'danger');
     } finally {
-        if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-lightning-charge-fill"></i> Wake'; }
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-lightning-charge-fill"></i> Wake';
     }
 }
 
@@ -170,7 +212,7 @@ async function quickWake() {
     }
 }
 
-// ── Device CRUD ───────────────────────────────────────────────────────────────
+// ── Add device ────────────────────────────────────────────────────────────────
 
 async function saveDevice() {
     const name = document.getElementById('dev-name').value.trim();
@@ -197,7 +239,6 @@ async function saveDevice() {
         const data = await r.json();
         if (r.ok) {
             bootstrap.Modal.getInstance(document.getElementById('addDeviceModal')).hide();
-            clearAddForm();
             appendDeviceCard(data);
             showToast(`${escapeHtml(name)} saved`, 'success');
         } else {
@@ -211,6 +252,59 @@ async function saveDevice() {
         btn.disabled = false;
     }
 }
+
+// ── Edit device ───────────────────────────────────────────────────────────────
+
+function openEditModal(id, name, mac, ip) {
+    document.getElementById('edit-dev-id').value   = id;
+    document.getElementById('edit-dev-name').value = name;
+    document.getElementById('edit-dev-mac').value  = mac;
+    document.getElementById('edit-dev-ip').value   = ip || '';
+    document.getElementById('edit-error').style.display = 'none';
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('editDeviceModal')).show();
+}
+
+async function submitEdit() {
+    const id   = document.getElementById('edit-dev-id').value;
+    const name = document.getElementById('edit-dev-name').value.trim();
+    const mac  = document.getElementById('edit-dev-mac').value.trim();
+    const ip   = document.getElementById('edit-dev-ip').value.trim();
+    const errEl = document.getElementById('edit-error');
+    errEl.style.display = 'none';
+
+    if (!name || !mac) {
+        errEl.textContent = 'Name and MAC address are required.';
+        errEl.style.display = '';
+        return;
+    }
+
+    const btn = document.getElementById('edit-btn');
+    btn.disabled = true;
+
+    try {
+        const r = await fetch(`/api/wol/devices/${encodeURIComponent(id)}`, {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({name, mac, ip})
+        });
+        const data = await r.json();
+        if (r.ok) {
+            bootstrap.Modal.getInstance(document.getElementById('editDeviceModal')).hide();
+            updateDeviceCard(data);
+            showToast(`${escapeHtml(name)} updated`, 'success');
+        } else {
+            errEl.textContent = data.error || 'Could not update device';
+            errEl.style.display = '';
+        }
+    } catch {
+        errEl.textContent = 'Network error';
+        errEl.style.display = '';
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+// ── Delete device ─────────────────────────────────────────────────────────────
 
 async function removeDevice(id) {
     if (!confirm('Remove this device?')) return;
@@ -231,13 +325,8 @@ async function removeDevice(id) {
 
 // ── DOM helpers ───────────────────────────────────────────────────────────────
 
-function appendDeviceCard(dev) {
-    document.getElementById('no-devices-msg')?.remove();
-
-    const col = document.createElement('div');
-    col.className = 'col-sm-6 col-md-4 col-lg-3';
-    col.id = `card-${dev.id}`;
-    col.innerHTML = `
+function deviceCardInner(dev) {
+    return `
         <div class="card h-100 shadow-sm">
             <div class="card-body d-flex flex-column">
                 <div class="d-flex justify-content-between align-items-start mb-2">
@@ -245,13 +334,20 @@ function appendDeviceCard(dev) {
                         <i class="bi bi-pc-display text-primary me-1"></i>
                         ${escapeHtml(dev.name)}
                     </h6>
-                    <button class="btn btn-sm btn-outline-danger border-0 p-1"
-                            onclick="removeDevice('${dev.id}')" title="Remove">
-                        <i class="bi bi-x-lg"></i>
-                    </button>
+                    <div class="d-flex gap-1">
+                        <button class="btn btn-sm btn-outline-secondary border-0 p-1"
+                                onclick="openEditModal('${dev.id}', ${JSON.stringify(dev.name)}, ${JSON.stringify(dev.mac)}, ${JSON.stringify(dev.ip || '')})"
+                                title="Edit">
+                            <i class="bi bi-pencil"></i>
+                        </button>
+                        <button class="btn btn-sm btn-outline-danger border-0 p-1"
+                                onclick="removeDevice('${dev.id}')" title="Remove">
+                            <i class="bi bi-x-lg"></i>
+                        </button>
+                    </div>
                 </div>
                 <small class="text-muted font-monospace mb-1">${escapeHtml(dev.mac)}</small>
-                <small class="text-muted mb-3">${dev.ip ? escapeHtml(dev.ip) : '&nbsp;'}</small>
+                <small class="text-muted mb-3">${dev.ip ? escapeHtml(dev.ip) : '\u00a0'}</small>
                 <button class="btn btn-success mt-auto"
                         onclick="wakeDevice('${dev.mac}', '${escapeHtml(dev.name)}')"
                         id="wake-${dev.id}">
@@ -259,12 +355,24 @@ function appendDeviceCard(dev) {
                 </button>
             </div>
         </div>`;
+}
+
+function appendDeviceCard(dev) {
+    document.getElementById('no-devices-msg')?.remove();
+    const col = document.createElement('div');
+    col.className = 'col-sm-6 col-md-4 col-lg-3';
+    col.id = `card-${dev.id}`;
+    col.innerHTML = deviceCardInner(dev);
     document.getElementById('devices-grid').appendChild(col);
 }
 
+function updateDeviceCard(dev) {
+    const col = document.getElementById(`card-${dev.id}`);
+    if (col) col.innerHTML = deviceCardInner(dev);
+}
+
 function showEmptyState() {
-    const grid = document.getElementById('devices-grid');
-    grid.innerHTML = `
+    document.getElementById('devices-grid').innerHTML = `
         <div class="col-12" id="no-devices-msg">
             <div class="text-center text-muted py-5">
                 <i class="bi bi-pc-display" style="font-size:3rem;"></i>
@@ -273,15 +381,11 @@ function showEmptyState() {
         </div>`;
 }
 
-function clearAddForm() {
+// Clear add form when modal is hidden
+document.getElementById('addDeviceModal').addEventListener('hidden.bs.modal', () => {
     ['dev-name','dev-mac','dev-ip'].forEach(id => document.getElementById(id).value = '');
-    const e = document.getElementById('add-error');
-    e.style.display = 'none';
-}
-
-// Clear form when modal is hidden
-document.getElementById('addDeviceModal')
-    .addEventListener('hidden.bs.modal', clearAddForm);
+    document.getElementById('add-error').style.display = 'none';
+});
 
 // Allow Enter key in quick-wake input
 document.getElementById('quick-mac')
