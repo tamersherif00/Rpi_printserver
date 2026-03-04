@@ -72,6 +72,27 @@ create_drivers_dir() {
     log_info "Printer drivers directory ready: /var/lib/samba/printers"
 }
 
+create_print_user() {
+    local PRINT_USER="printuser"
+    local PRINT_PASS="printserver"
+
+    # Windows 10/11 blocks unauthenticated guest access (error 1272) regardless
+    # of Samba config. A dedicated Samba account lets Windows authenticate
+    # normally without requiring the "Enable insecure guest logons" Group Policy.
+
+    # Create a no-login system account if it doesn't already exist.
+    if ! id "$PRINT_USER" &>/dev/null; then
+        useradd -r -M -s /usr/sbin/nologin -c "Samba Print User" "$PRINT_USER"
+        log_info "Created system user: $PRINT_USER"
+    fi
+
+    # Register the user in Samba's own credential store (separate from /etc/passwd).
+    printf '%s\n%s\n' "$PRINT_PASS" "$PRINT_PASS" | smbpasswd -a -s "$PRINT_USER"
+    smbpasswd -e "$PRINT_USER"   # ensure the account is enabled
+    log_info "Samba user '$PRINT_USER' ready (password: $PRINT_PASS)"
+    log_warn "Change the default password with: sudo smbpasswd $PRINT_USER"
+}
+
 validate_config() {
     log_info "Validating Samba configuration..."
     if command -v testparm &> /dev/null; then
@@ -119,6 +140,7 @@ main() {
     install_smb_conf
     create_spool_dir
     create_drivers_dir
+    create_print_user
     validate_config
     enable_and_restart_samba
     verify_shares

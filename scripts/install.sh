@@ -546,8 +546,19 @@ print_summary() {
     fi
     echo "========================================"
     echo
-    log_info "Web interface: http://$(hostname -I | awk '{print $1}'):5000"
-    log_info "CUPS admin:    http://$(hostname -I | awk '{print $1}'):631"
+    PI_IP=$(hostname -I | awk '{print $1}')
+    log_info "Web interface: http://${PI_IP}:5000"
+    log_info "CUPS admin:    http://${PI_IP}:631"
+    echo
+    log_info "── Windows printing ─────────────────────────────────────────"
+    log_info "  Recommended (IPP, no password needed):"
+    log_info "    Settings → Printers → Add → 'not listed' → 'by name' →"
+    log_info "    http://${PI_IP}:631/printers/<PrinterName>"
+    echo
+    log_info "  SMB path (File Explorer): \\\\${PI_IP}"
+    log_info "    Username: printuser"
+    log_info "    Password: printserver  (change: sudo smbpasswd printuser)"
+    log_info "─────────────────────────────────────────────────────────────"
     echo
     log_info "To check status: sudo systemctl status printserver-web"
     log_info "To view logs:    sudo journalctl -u printserver-web -f"
