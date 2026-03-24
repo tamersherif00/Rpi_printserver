@@ -515,6 +515,10 @@ wait_for_cups() {
 start_services() {
     log_info "Starting services..."
 
+    # Clear any previous start-limit failures so systemd allows starting
+    systemctl reset-failed printserver-web.service 2>/dev/null || true
+    systemctl reset-failed cups.service 2>/dev/null || true
+
     systemctl start cups
 
     # Wait for CUPS to actually be ready before starting dependent services
@@ -525,11 +529,17 @@ start_services() {
     systemctl start wsdd 2>/dev/null || true
     systemctl start printserver-web
 
-    # Verify with health check
-    sleep 3
-    if curl -s -o /dev/null -w "%{http_code}" http://localhost:5000/health 2>/dev/null | grep -q "200"; then
-        log_info "Web interface is healthy"
-    else
+    # Verify with health check (retry a few times — gunicorn needs time to bind)
+    local attempt=1
+    while [[ $attempt -le 5 ]]; do
+        if curl -s -o /dev/null -w "%{http_code}" http://localhost:5000/health 2>/dev/null | grep -q "200"; then
+            log_info "Web interface is healthy"
+            break
+        fi
+        sleep 2
+        ((attempt++))
+    done
+    if [[ $attempt -gt 5 ]]; then
         log_warn "Web interface may still be starting. Check: systemctl status printserver-web"
     fi
 
@@ -538,6 +548,15 @@ start_services() {
 
 restart_services() {
     log_info "Restarting services to apply updates..."
+
+    # Reload unit files in case the .service file was updated during install
+    systemctl daemon-reload
+
+    # Clear any previous start-limit failures so systemd allows restarting.
+    # Without this, hitting StartLimitBurst=5 causes systemd to permanently
+    # refuse to start the service until the failed state is manually cleared.
+    systemctl reset-failed printserver-web.service 2>/dev/null || true
+    systemctl reset-failed cups.service 2>/dev/null || true
 
     # Restart CUPS and wait for it to be ready
     systemctl restart cups
@@ -554,7 +573,6 @@ restart_services() {
 
     # Restart web interface to apply code updates
     systemctl restart printserver-web
-    sleep 2
 
     # Verify all services are running
     if systemctl is-active --quiet cups && \
@@ -566,10 +584,17 @@ restart_services() {
         log_warn "  systemctl status cups avahi-daemon smbd printserver-web"
     fi
 
-    # Verify web interface health
-    if curl -s -o /dev/null -w "%{http_code}" http://localhost:5000/health 2>/dev/null | grep -q "200"; then
-        log_info "Web interface health check passed"
-    else
+    # Verify web interface health (retry a few times — gunicorn needs time to bind)
+    local attempt=1
+    while [[ $attempt -le 5 ]]; do
+        if curl -s -o /dev/null -w "%{http_code}" http://localhost:5000/health 2>/dev/null | grep -q "200"; then
+            log_info "Web interface health check passed"
+            break
+        fi
+        sleep 2
+        ((attempt++))
+    done
+    if [[ $attempt -gt 5 ]]; then
         log_warn "Web interface health check failed - it may still be starting"
     fi
 }

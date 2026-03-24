@@ -76,6 +76,9 @@ if [[ -f "$SERVICE_SRC" ]]; then
 fi
 
 # ── 5. Restart the web service ────────────────────────────────────────────────
+# Clear any start-limit failures (StartLimitBurst=5) so systemd allows restart
+systemctl reset-failed printserver-web.service 2>/dev/null || true
+
 log_info "Restarting printserver-web..."
 systemctl restart printserver-web
 

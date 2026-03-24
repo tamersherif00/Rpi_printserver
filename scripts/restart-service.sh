@@ -29,6 +29,9 @@ if [[ "$VALID" != "true" ]]; then
     exit 1
 fi
 
+# Clear any start-limit failures so systemd allows restart
+systemctl reset-failed "$SERVICE" 2>/dev/null || true
+
 # Restart the service
 systemctl restart "$SERVICE"
 
