@@ -61,14 +61,23 @@ configure_cups() {
 configure_sharing() {
     log_info "Enabling printer sharing..."
 
-    # Enable sharing in CUPS
-    cupsctl --share-printers
-    cupsctl --remote-any
+    # cupsctl talks to CUPS over HTTP (localhost:631). Even after lpstat confirms
+    # the scheduler is running, the socket can still refuse connections briefly.
+    # Retry up to 5 times with a 3-second backoff before giving up (non-fatal).
+    local max_attempts=5
+    local attempt=1
+    while [[ $attempt -le $max_attempts ]]; do
+        if cupsctl --share-printers 2>/dev/null && cupsctl --remote-any 2>/dev/null; then
+            log_info "Printer sharing enabled"
+            return 0
+        fi
+        log_warn "cupsctl attempt $attempt/$max_attempts failed, retrying in 3s..."
+        sleep 3
+        ((attempt++))
+    done
 
-    # Allow remote administration (optional, for debugging)
-    # cupsctl --remote-admin
-
-    log_info "Printer sharing enabled"
+    log_warn "cupsctl could not enable sharing after $max_attempts attempts (non-fatal)."
+    log_warn "Run manually once CUPS is stable:  cupsctl --share-printers --remote-any"
 }
 
 configure_ipp() {
@@ -126,6 +135,11 @@ configure_samba() {
     log_info "Configuring Samba for legacy Windows support..."
 
     SAMBA_CONFIG="/etc/samba/smb.conf"
+
+    if [[ ! -f "$SAMBA_CONFIG" ]]; then
+        log_warn "Samba config not found at $SAMBA_CONFIG, skipping"
+        return 0
+    fi
 
     # Check if CUPS printing section exists
     if ! grep -q "\[printers\]" "$SAMBA_CONFIG" 2>/dev/null; then
@@ -200,14 +214,22 @@ restart_cups() {
     log_info "Restarting CUPS service..."
     systemctl restart cups
 
-    # Wait for CUPS to be ready
-    sleep 2
-
-    if systemctl is-active cups > /dev/null 2>&1; then
-        log_info "CUPS is running"
-    else
-        log_warn "CUPS may not have started correctly"
-        systemctl status cups
+    # Poll until the CUPS scheduler is accepting connections (not just running).
+    # `lpstat -r` tests the HTTP socket at localhost:631; `systemctl is-active`
+    # only checks the process, which becomes active before the socket is ready.
+    local max_attempts=20
+    local attempt=1
+    while [[ $attempt -le $max_attempts ]]; do
+        if lpstat -r 2>/dev/null | grep -q "scheduler is running"; then
+            log_info "CUPS scheduler is ready (attempt $attempt)"
+            break
+        fi
+        log_info "Waiting for CUPS scheduler (attempt $attempt/$max_attempts)..."
+        sleep 2
+        ((attempt++))
+    done
+    if [[ $attempt -gt $max_attempts ]]; then
+        log_warn "CUPS scheduler not confirmed ready after $max_attempts attempts — continuing"
     fi
 
     # Also restart cups-browsed if running (picks up new config)
@@ -237,12 +259,15 @@ main() {
 
     backup_config
     configure_cups
+    configure_job_preservation
+
+    # Restart CUPS now so the new config is loaded before cupsctl calls
+    restart_cups
+
     configure_sharing
     configure_ipp
     configure_samba
-    configure_job_preservation
     add_user_to_lpadmin
-    restart_cups
     configure_error_recovery
 
     log_info "CUPS configuration complete"

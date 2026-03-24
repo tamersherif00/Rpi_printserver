@@ -27,14 +27,15 @@ log_info "Enabling all printers to accept jobs..."
 
 # Get list of all printers and enable them
 printer_count=0
-lpstat -p 2>/dev/null | awk '{print $2}' | while read -r printer; do
+while read -r printer; do
     if [[ -n "$printer" ]]; then
         log_info "Enabling printer: $printer"
         cupsenable "$printer" 2>/dev/null || true
         cupsaccept "$printer" 2>/dev/null || true
+        lpadmin -p "$printer" -o printer-is-shared=true 2>/dev/null || true
         ((printer_count++))
     fi
-done
+done < <(lpstat -p 2>/dev/null | awk '{print $2}')
 
 log_info "Checking printer status..."
 lpstat -a 2>/dev/null

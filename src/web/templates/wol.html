@@ -1,0 +1,407 @@
+{% extends "base.html" %}
+{% block title %}Wake on LAN – Print Server{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-power"></i> Wake on LAN</h2>
+    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addDeviceModal">
+        <i class="bi bi-plus-lg"></i> Add Device
+    </button>
+</div>
+
+<!-- Saved Devices -->
+<section class="mb-5">
+    <h5 class="text-muted mb-3">Saved Devices</h5>
+    <div id="devices-grid" class="row g-3">
+        {% if devices %}
+            {% for dev in devices %}
+            <div class="col-sm-6 col-md-4 col-lg-3" id="card-{{ dev.id }}">
+                <div class="card h-100 shadow-sm">
+                    <div class="card-body d-flex flex-column">
+                        <div class="d-flex justify-content-between align-items-start mb-2">
+                            <h6 class="card-title mb-0">
+                                <i class="bi bi-pc-display text-primary me-1"></i>
+                                {{ dev.name | e }}
+                            </h6>
+                            <div class="d-flex gap-1">
+                                <button class="btn btn-sm btn-outline-secondary border-0 p-1"
+                                        data-id="{{ dev.id }}"
+                                        data-name="{{ dev.name | e }}"
+                                        data-mac="{{ dev.mac | e }}"
+                                        data-ip="{{ dev.ip | e }}"
+                                        onclick="openEditModal(this)"
+                                        title="Edit">
+                                    <i class="bi bi-pencil"></i>
+                                </button>
+                                <button class="btn btn-sm btn-outline-danger border-0 p-1"
+                                        onclick="removeDevice('{{ dev.id }}')"
+                                        title="Remove">
+                                    <i class="bi bi-x-lg"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <small class="text-muted font-monospace mb-1">{{ dev.mac | e }}</small>
+                        <small class="text-muted mb-3">{{ dev.ip if dev.ip else '\u00a0' }}</small>
+                        <button class="btn btn-success mt-auto"
+                                data-mac="{{ dev.mac | e }}"
+                                data-name="{{ dev.name | e }}"
+                                onclick="wakeDevice(this)"
+                                id="wake-{{ dev.id }}">
+                            <i class="bi bi-lightning-charge-fill"></i> Wake
+                        </button>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        {% else %}
+            <div class="col-12" id="no-devices-msg">
+                <div class="text-center text-muted py-5">
+                    <i class="bi bi-pc-display" style="font-size:3rem;"></i>
+                    <p class="mt-2">No saved devices yet.<br>Click <strong>Add Device</strong> to save a favourite.</p>
+                </div>
+            </div>
+        {% endif %}
+    </div>
+</section>
+
+<!-- Quick Wake -->
+<section>
+    <div class="card shadow-sm">
+        <div class="card-header">
+            <h6 class="mb-0"><i class="bi bi-lightning-charge"></i> Quick Wake</h6>
+        </div>
+        <div class="card-body">
+            <p class="text-muted small mb-3">Send a magic packet once without saving the device.</p>
+            <div class="input-group" style="max-width:480px;">
+                <span class="input-group-text"><i class="bi bi-ethernet"></i></span>
+                <input type="text" id="quick-mac" class="form-control font-monospace"
+                       placeholder="AA:BB:CC:DD:EE:FF"
+                       maxlength="17"
+                       autocomplete="off">
+                <button class="btn btn-outline-success" onclick="quickWake()">
+                    <i class="bi bi-lightning-charge-fill"></i> Send
+                </button>
+            </div>
+            <div id="quick-error" class="text-danger small mt-2" style="display:none;"></div>
+        </div>
+    </div>
+</section>
+
+<!-- Add Device Modal -->
+<div class="modal fade" id="addDeviceModal" tabindex="-1" aria-labelledby="addDeviceModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="addDeviceModalLabel">
+                    <i class="bi bi-pc-display-horizontal"></i> Add Device
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label for="dev-name" class="form-label">Name <span class="text-danger">*</span></label>
+                    <input type="text" id="dev-name" class="form-control" placeholder="Gaming PC" maxlength="64" autocomplete="off">
+                </div>
+                <div class="mb-3">
+                    <label for="dev-mac" class="form-label">MAC Address <span class="text-danger">*</span></label>
+                    <input type="text" id="dev-mac" class="form-control font-monospace"
+                           placeholder="AA:BB:CC:DD:EE:FF" maxlength="17" autocomplete="off">
+                    <div class="form-text">Accepts colons, hyphens, dots, or no delimiter.</div>
+                </div>
+                <div class="mb-3">
+                    <label for="dev-ip" class="form-label">IP Address <span class="text-muted">(optional, for reference)</span></label>
+                    <input type="text" id="dev-ip" class="form-control" placeholder="192.168.0.x" maxlength="39" autocomplete="off">
+                </div>
+                <div id="add-error" class="alert alert-danger py-2" style="display:none;"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="saveDevice()" id="save-btn">
+                    <i class="bi bi-floppy"></i> Save Device
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Device Modal -->
+<div class="modal fade" id="editDeviceModal" tabindex="-1" aria-labelledby="editDeviceModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="editDeviceModalLabel">
+                    <i class="bi bi-pencil-square"></i> Edit Device
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="edit-dev-id">
+                <div class="mb-3">
+                    <label for="edit-dev-name" class="form-label">Name <span class="text-danger">*</span></label>
+                    <input type="text" id="edit-dev-name" class="form-control" maxlength="64" autocomplete="off">
+                </div>
+                <div class="mb-3">
+                    <label for="edit-dev-mac" class="form-label">MAC Address <span class="text-danger">*</span></label>
+                    <input type="text" id="edit-dev-mac" class="form-control font-monospace" maxlength="17" autocomplete="off">
+                    <div class="form-text">Accepts colons, hyphens, dots, or no delimiter.</div>
+                </div>
+                <div class="mb-3">
+                    <label for="edit-dev-ip" class="form-label">IP Address <span class="text-muted">(optional, for reference)</span></label>
+                    <input type="text" id="edit-dev-ip" class="form-control" maxlength="39" autocomplete="off">
+                </div>
+                <div id="edit-error" class="alert alert-danger py-2" style="display:none;"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="submitEdit()" id="edit-btn">
+                    <i class="bi bi-floppy"></i> Save Changes
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── Wake helpers ──────────────────────────────────────────────────────────────
+
+async function wakeDevice(btn) {
+    const mac  = btn.dataset.mac;
+    const name = btn.dataset.name;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+
+    try {
+        const r = await fetch('/api/wol/wake', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({mac})
+        });
+        const data = await r.json();
+        if (r.ok) {
+            showToast(`Magic packet sent to ${escapeHtml(name)} (${escapeHtml(mac)})`, 'success');
+        } else {
+            showToast(data.error || 'Failed to send packet', 'danger');
+        }
+    } catch {
+        showToast('Network error — could not send packet', 'danger');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-lightning-charge-fill"></i> Wake';
+    }
+}
+
+async function quickWake() {
+    const mac = document.getElementById('quick-mac').value.trim();
+    const errEl = document.getElementById('quick-error');
+    errEl.style.display = 'none';
+
+    if (!mac) { errEl.textContent = 'Enter a MAC address.'; errEl.style.display = ''; return; }
+
+    try {
+        const r = await fetch('/api/wol/wake', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({mac})
+        });
+        const data = await r.json();
+        if (r.ok) {
+            showToast(`Magic packet sent to ${escapeHtml(mac)}`, 'success');
+            document.getElementById('quick-mac').value = '';
+        } else {
+            errEl.textContent = data.error || 'Failed to send packet';
+            errEl.style.display = '';
+        }
+    } catch {
+        errEl.textContent = 'Network error — could not send packet';
+        errEl.style.display = '';
+    }
+}
+
+// ── Add device ────────────────────────────────────────────────────────────────
+
+async function saveDevice() {
+    const name = document.getElementById('dev-name').value.trim();
+    const mac  = document.getElementById('dev-mac').value.trim();
+    const ip   = document.getElementById('dev-ip').value.trim();
+    const errEl = document.getElementById('add-error');
+    errEl.style.display = 'none';
+
+    if (!name || !mac) {
+        errEl.textContent = 'Name and MAC address are required.';
+        errEl.style.display = '';
+        return;
+    }
+
+    const btn = document.getElementById('save-btn');
+    btn.disabled = true;
+
+    try {
+        const r = await fetch('/api/wol/devices', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({name, mac, ip})
+        });
+        const data = await r.json();
+        if (r.ok) {
+            bootstrap.Modal.getInstance(document.getElementById('addDeviceModal')).hide();
+            appendDeviceCard(data);
+            showToast(`${escapeHtml(name)} saved`, 'success');
+        } else {
+            errEl.textContent = data.error || 'Could not save device';
+            errEl.style.display = '';
+        }
+    } catch {
+        errEl.textContent = 'Network error';
+        errEl.style.display = '';
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+// ── Edit device ───────────────────────────────────────────────────────────────
+
+function openEditModal(btn) {
+    document.getElementById('edit-dev-id').value   = btn.dataset.id;
+    document.getElementById('edit-dev-name').value = btn.dataset.name;
+    document.getElementById('edit-dev-mac').value  = btn.dataset.mac;
+    document.getElementById('edit-dev-ip').value   = btn.dataset.ip || '';
+    document.getElementById('edit-error').style.display = 'none';
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('editDeviceModal')).show();
+}
+
+async function submitEdit() {
+    const id   = document.getElementById('edit-dev-id').value;
+    const name = document.getElementById('edit-dev-name').value.trim();
+    const mac  = document.getElementById('edit-dev-mac').value.trim();
+    const ip   = document.getElementById('edit-dev-ip').value.trim();
+    const errEl = document.getElementById('edit-error');
+    errEl.style.display = 'none';
+
+    if (!name || !mac) {
+        errEl.textContent = 'Name and MAC address are required.';
+        errEl.style.display = '';
+        return;
+    }
+
+    const btn = document.getElementById('edit-btn');
+    btn.disabled = true;
+
+    try {
+        const r = await fetch(`/api/wol/devices/${encodeURIComponent(id)}`, {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({name, mac, ip})
+        });
+        const data = await r.json();
+        if (r.ok) {
+            bootstrap.Modal.getInstance(document.getElementById('editDeviceModal')).hide();
+            updateDeviceCard(data);
+            showToast(`${escapeHtml(name)} updated`, 'success');
+        } else {
+            errEl.textContent = data.error || 'Could not update device';
+            errEl.style.display = '';
+        }
+    } catch {
+        errEl.textContent = 'Network error';
+        errEl.style.display = '';
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+// ── Delete device ─────────────────────────────────────────────────────────────
+
+async function removeDevice(id) {
+    if (!confirm('Remove this device?')) return;
+    try {
+        const r = await fetch(`/api/wol/devices/${id}`, {method: 'DELETE'});
+        if (r.ok) {
+            document.getElementById(`card-${id}`)?.remove();
+            if (!document.querySelector('#devices-grid .col-sm-6')) {
+                showEmptyState();
+            }
+        } else {
+            showToast('Could not remove device', 'danger');
+        }
+    } catch {
+        showToast('Network error', 'danger');
+    }
+}
+
+// ── DOM helpers ───────────────────────────────────────────────────────────────
+
+function deviceCardInner(dev) {
+    return `
+        <div class="card h-100 shadow-sm">
+            <div class="card-body d-flex flex-column">
+                <div class="d-flex justify-content-between align-items-start mb-2">
+                    <h6 class="card-title mb-0">
+                        <i class="bi bi-pc-display text-primary me-1"></i>
+                        ${escapeHtml(dev.name)}
+                    </h6>
+                    <div class="d-flex gap-1">
+                        <button class="btn btn-sm btn-outline-secondary border-0 p-1"
+                                data-id="${dev.id}"
+                                data-name="${escapeHtml(dev.name)}"
+                                data-mac="${escapeHtml(dev.mac)}"
+                                data-ip="${escapeHtml(dev.ip || '')}"
+                                onclick="openEditModal(this)"
+                                title="Edit">
+                            <i class="bi bi-pencil"></i>
+                        </button>
+                        <button class="btn btn-sm btn-outline-danger border-0 p-1"
+                                onclick="removeDevice('${dev.id}')" title="Remove">
+                            <i class="bi bi-x-lg"></i>
+                        </button>
+                    </div>
+                </div>
+                <small class="text-muted font-monospace mb-1">${escapeHtml(dev.mac)}</small>
+                <small class="text-muted mb-3">${dev.ip ? escapeHtml(dev.ip) : '\u00a0'}</small>
+                <button class="btn btn-success mt-auto"
+                        data-mac="${escapeHtml(dev.mac)}"
+                        data-name="${escapeHtml(dev.name)}"
+                        onclick="wakeDevice(this)"
+                        id="wake-${dev.id}">
+                    <i class="bi bi-lightning-charge-fill"></i> Wake
+                </button>
+            </div>
+        </div>`;
+}
+
+function appendDeviceCard(dev) {
+    document.getElementById('no-devices-msg')?.remove();
+    const col = document.createElement('div');
+    col.className = 'col-sm-6 col-md-4 col-lg-3';
+    col.id = `card-${dev.id}`;
+    col.innerHTML = deviceCardInner(dev);
+    document.getElementById('devices-grid').appendChild(col);
+}
+
+function updateDeviceCard(dev) {
+    const col = document.getElementById(`card-${dev.id}`);
+    if (col) col.innerHTML = deviceCardInner(dev);
+}
+
+function showEmptyState() {
+    document.getElementById('devices-grid').innerHTML = `
+        <div class="col-12" id="no-devices-msg">
+            <div class="text-center text-muted py-5">
+                <i class="bi bi-pc-display" style="font-size:3rem;"></i>
+                <p class="mt-2">No saved devices yet.<br>Click <strong>Add Device</strong> to save a favourite.</p>
+            </div>
+        </div>`;
+}
+
+// Clear add form when modal is hidden
+document.getElementById('addDeviceModal').addEventListener('hidden.bs.modal', () => {
+    ['dev-name','dev-mac','dev-ip'].forEach(id => document.getElementById(id).value = '');
+    document.getElementById('add-error').style.display = 'none';
+});
+
+// Allow Enter key in quick-wake input
+document.getElementById('quick-mac')
+    .addEventListener('keydown', e => { if (e.key === 'Enter') quickWake(); });
+</script>
+{% endblock %}

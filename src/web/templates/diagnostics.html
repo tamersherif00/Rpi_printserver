@@ -74,8 +74,8 @@
             <div id="services-detail" class="collapse show">
                 <div class="card-body">
                     <table class="table table-sm mb-0" id="services-table">
-                        <thead><tr><th>Service</th><th>State</th><th>Sub-state</th><th>Since</th><th>Actions</th></tr></thead>
-                        <tbody><tr><td colspan="5" class="text-muted">Loading...</td></tr></tbody>
+                        <thead><tr><th>Service</th><th>Description</th><th>State</th><th>Sub-state</th><th>Since</th><th>Actions</th></tr></thead>
+                        <tbody><tr><td colspan="6" class="text-muted">Loading...</td></tr></tbody>
                     </table>
                 </div>
             </div>
@@ -203,6 +203,15 @@
     // Service name to systemd unit mapping for restart
     const SERVICE_UNIT_MAP = { cups: 'cups', avahi: 'avahi-daemon', printserver: 'printserver-web' };
 
+    // Human-readable descriptions for each service shown in the diagnostics table
+    const SERVICE_DESCRIPTIONS = {
+        cups:        'Print spooler — manages printer queues and jobs',
+        avahi:       'mDNS/DNS-SD — advertises printers as AirPrint on the network',
+        printserver: 'Web interface — this print server portal',
+        samba:       'SMB sharing — makes printers visible to Windows via \\\\server',
+        wsdd:        'WS-Discovery — broadcasts server to Windows Network Explorer',
+    };
+
     // Raw log data stored for client-side filtering
     let rawLogEntries = [];
     let currentLogService = 'printserver-web';
@@ -261,9 +270,11 @@
         if (svcTbody && d.services) {
             const rows = Object.entries(d.services).map(([name, svc]) => {
                 const unit = SERVICE_UNIT_MAP[name] || name;
+                const desc = SERVICE_DESCRIPTIONS[name] || '';
                 return `
                 <tr>
                     <td><strong>${escapeHtml(name)}</strong></td>
+                    <td><small class="text-muted">${escapeHtml(desc)}</small></td>
                     <td><span class="badge ${svc.active ? 'bg-success' : 'bg-danger'}">${escapeHtml(svc.state)}</span></td>
                     <td>${escapeHtml(svc.sub_state || '-')}</td>
                     <td><small>${escapeHtml(svc.since || '-')}</small></td>

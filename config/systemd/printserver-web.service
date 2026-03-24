@@ -4,6 +4,8 @@ Documentation=https://github.com/your-repo/rpi-printserver
 After=network-online.target cups.service avahi-daemon.service
 Wants=network-online.target avahi-daemon.service
 Requires=cups.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=exec
@@ -17,15 +19,16 @@ Environment=PRINTSERVER_CONFIG=/etc/printserver/config.ini
 # Wait for CUPS to be ready before starting (fast exponential poll: 0.5, 1, 2, 2, 2... up to ~10s)
 ExecStartPre=/bin/sh -c 'delay=0.5; for i in 1 2 3 4 5 6; do systemctl is-active cups >/dev/null 2>&1 && exit 0; sleep $delay; delay=$(echo "$delay 2" | awk "{d=\$1*\$2; print (d>2?2:d)}"); done; exit 0'
 ExecStart=/opt/printserver/venv/bin/gunicorn \
-    --workers 2 \
-    --threads 2 \
+    --workers 1 \
+    --threads 4 \
     --worker-class gthread \
     --bind 0.0.0.0:5000 \
     --timeout 15 \
     --graceful-timeout 10 \
     --keep-alive 2 \
-    --max-requests 1000 \
+    --max-requests 500 \
     --max-requests-jitter 50 \
+    --worker-tmp-dir /dev/shm \
     --access-logfile - \
     --error-logfile - \
     'web.app:create_app()'
@@ -34,25 +37,24 @@ ExecReload=/bin/kill -HUP $MAINPID
 # Restart configuration
 Restart=always
 RestartSec=5
-StartLimitIntervalSec=300
-StartLimitBurst=5
 
 # Timeouts
 TimeoutStartSec=30
 TimeoutStopSec=10
-
-# Watchdog: systemd kills service if unresponsive for 60s
-WatchdogSec=60
 
 # Security hardening
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=true
-ReadWritePaths=/var/log/printserver
+ReadWritePaths=/var/log/printserver /var/lib/printserver
+RuntimeDirectory=printserver
 
 # Resource limits — tuned for 1GB Raspberry Pi
-MemoryHigh=192M
+# MemoryHigh: soft limit — kernel applies memory pressure (reclaim/throttle)
+# MemoryMax: hard limit — OOM kills the process to protect the rest of the OS
+# Watchdog thread warns at 150 MB and clears caches at 190 MB RSS.
+MemoryHigh=160M
 MemoryMax=256M
 MemorySwapMax=64M
 CPUQuota=50%

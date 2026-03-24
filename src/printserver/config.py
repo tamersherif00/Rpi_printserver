@@ -2,6 +2,7 @@
 
 import configparser
 import logging
+import logging.handlers
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +18,7 @@ DEFAULT_WEB_HOST = "0.0.0.0"
 DEFAULT_CUPS_HOST = "localhost"
 DEFAULT_CUPS_PORT = 631
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+LOG_FILE = Path("/var/log/printserver/app.log")
 
 
 @dataclass
@@ -132,13 +134,55 @@ class ServerConfig:
 def setup_logging(level: str = "INFO") -> logging.Logger:
     """Configure logging for the print server.
 
+    Sets up two handlers on the root logger:
+    - StreamHandler (stdout → journald via systemd)
+    - RotatingFileHandler writing to LOG_FILE with immediate flush per record
+
+    The file handler is critical for post-freeze debugging: journald buffers
+    writes in RAM and loses them on a hard freeze, but FileHandler calls
+    flush() after every emit(), so each line reaches the OS page cache
+    immediately and survives all but the hardest power-loss scenarios.
+
     Args:
         level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
 
     Returns:
         Configured logger instance.
     """
-    logging.basicConfig(level=getattr(logging, level.upper()), format=LOG_FORMAT)
+    log_level = getattr(logging, level.upper(), logging.INFO)
+    formatter = logging.Formatter(LOG_FORMAT)
+
+    root = logging.getLogger()
+    root.setLevel(log_level)
+
+    # Only add handlers if none exist yet (guard against double-init in tests)
+    if not root.handlers:
+        stream_handler = logging.StreamHandler()
+        stream_handler.setFormatter(formatter)
+        root.addHandler(stream_handler)
+
+    # Always add the file handler if it isn't already present — this is the
+    # handler that survives hard freezes.  Silently skip if the log directory
+    # doesn't exist (e.g. during unit tests running outside the Pi).
+    if not any(
+        isinstance(h, logging.handlers.RotatingFileHandler) for h in root.handlers
+    ):
+        try:
+            LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+            file_handler = logging.handlers.RotatingFileHandler(
+                LOG_FILE,
+                maxBytes=5 * 1024 * 1024,  # 5 MB per file
+                backupCount=3,
+                encoding="utf-8",
+            )
+            file_handler.setFormatter(formatter)
+            root.addHandler(file_handler)
+        except OSError:
+            # Non-fatal: fall back to journald-only logging
+            logging.getLogger(__name__).warning(
+                "Could not open log file %s — logging to journald only", LOG_FILE
+            )
+
     return logging.getLogger("printserver")
 
 

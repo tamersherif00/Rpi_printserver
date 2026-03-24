@@ -66,39 +66,107 @@ install_system_packages() {
     log_info "Updating package lists..."
     apt-get update
 
+    # ── Mandatory packages ────────────────────────────────────────────────────
+    # These are required for the print server to function; exit on failure.
     log_info "Installing required packages..."
     apt-get install -y \
         cups \
-        cups-filters \
-        cups-browsed \
+        cups-bsd \
         avahi-daemon \
         avahi-utils \
         python3 \
         python3-pip \
         python3-venv \
         python3-cups \
-        libcups2-dev \
         samba \
         wireless-tools
 
-    # Install Brother printer drivers
-    log_info "Installing Brother printer drivers..."
+    # ── Optional system packages ──────────────────────────────────────────────
+    # Package names and availability vary across Debian/Raspbian releases
+    # (e.g. cups-browsed was split from cups-filters in Debian Trixie+).
+    # Install each individually so a missing package doesn't abort the script.
+    for pkg in cups-filters cups-browsed libcups2-dev; do
+        if apt-get install -y "$pkg" 2>/dev/null; then
+            log_info "  installed: $pkg"
+        else
+            log_warn "$pkg not available in current repos — skipping (non-fatal)"
+        fi
+    done
 
-    # brlaser - open source driver for many Brother laser printers
-    if apt-cache show printer-driver-brlaser > /dev/null 2>&1; then
-        apt-get install -y printer-driver-brlaser
-        log_info "Installed brlaser driver (HL-L2300, HL-L2340, HL-L2360, DCP-L2500, etc.)"
+    # ── wsdd: Windows 10/11 auto-discovery via WS-Discovery ──────────────────
+    # Strategy:
+    #   1. Try apt  (available on Bullseye/Bookworm; removed from Trixie+).
+    #   2. Download the standalone Python script from the upstream GitHub repo.
+    #      wsdd is NOT published to PyPI — pip install wsdd will always fail.
+    #   3. Warn and provide manual-add instructions if both methods fail.
+    if apt-get install -y wsdd 2>/dev/null; then
+        log_info "wsdd installed from apt"
+        # The apt package ships its own service file (ExecStart without -w).
+        # Add a drop-in that overrides ExecStart to include -w WORKGROUP so
+        # Windows places the device in the right network group for discovery.
+        local apt_svc=""
+        for f in /lib/systemd/system/wsdd.service /usr/lib/systemd/system/wsdd.service; do
+            [[ -f "$f" ]] && { apt_svc="$f"; break; }
+        done
+        if [[ -n "$apt_svc" ]]; then
+            local wsdd_bin
+            wsdd_bin=$(grep "^ExecStart=" "$apt_svc" | head -1 | sed 's/ExecStart=//' | awk '{print $1}')
+            if [[ -n "$wsdd_bin" ]]; then
+                mkdir -p /etc/systemd/system/wsdd.service.d
+                printf '[Service]\nExecStart=\nExecStart=%s -w WORKGROUP\n' "$wsdd_bin" \
+                    > /etc/systemd/system/wsdd.service.d/printserver.conf
+                systemctl daemon-reload
+                log_info "wsdd: applied -w WORKGROUP via systemd drop-in"
+            fi
+        fi
+    else
+        log_info "apt wsdd unavailable — downloading from GitHub (christgau/wsdd)..."
+        WSDD_BIN="/usr/local/bin/wsdd"
+        if wget -q -O "$WSDD_BIN" \
+               "https://raw.githubusercontent.com/christgau/wsdd/master/src/wsdd.py" \
+            && chmod +x "$WSDD_BIN"; then
+
+            # Only write the unit file if apt didn't already install one.
+            if [[ ! -f /lib/systemd/system/wsdd.service ]] && \
+               [[ ! -f /usr/lib/systemd/system/wsdd.service ]]; then
+                cat > /etc/systemd/system/wsdd.service << 'WSDD_EOF'
+[Unit]
+Description=Web Services Dynamic Discovery Daemon
+Documentation=https://github.com/christgau/wsdd
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# -w WORKGROUP  must match the workgroup in smb.conf so Windows places
+#               the device in the right network group for discovery.
+ExecStart=/usr/local/bin/wsdd -w WORKGROUP
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+WSDD_EOF
+                systemctl daemon-reload
+            fi
+            log_info "wsdd installed from GitHub, systemd unit created"
+        else
+            log_warn "wsdd could not be installed (apt unavailable, GitHub download failed)."
+            log_warn "Windows auto-discovery via WSD will not work automatically."
+            log_warn "Windows users can still add the printer manually:"
+            log_warn "  SMB path: \\\\$(hostname)\\<PrinterName>"
+            log_warn "  IPP URL:  http://$(hostname -I | awk '{print \$1}'):631/printers/<PrinterName>"
+        fi
     fi
 
-    # Brother's official CUPS wrapper (for inkjet and some lasers)
-    if apt-cache show printer-driver-cups-pdf > /dev/null 2>&1; then
-        apt-get install -y printer-driver-cups-pdf
-    fi
-
-    # Gutenprint - additional printer support
-    if apt-cache show printer-driver-gutenprint > /dev/null 2>&1; then
-        apt-get install -y printer-driver-gutenprint
-    fi
+    # ── Optional printer drivers ──────────────────────────────────────────────
+    log_info "Installing printer drivers (where available)..."
+    for pkg in printer-driver-brlaser printer-driver-cups-pdf printer-driver-gutenprint; do
+        if apt-cache show "$pkg" > /dev/null 2>&1; then
+            apt-get install -y "$pkg" && log_info "  installed: $pkg"
+        else
+            log_warn "  $pkg not available in current repos — skipping"
+        fi
+    done
 
     # Add user to lpadmin group for CUPS administration
     if [[ -n "$ACTUAL_USER" ]] && [[ "$ACTUAL_USER" != "root" ]]; then
@@ -140,6 +208,7 @@ create_directories() {
     mkdir -p "$INSTALL_DIR"
     mkdir -p "$CONFIG_DIR"
     mkdir -p /var/log/printserver
+    mkdir -p /var/lib/printserver   # WOL device store (wol_devices.json)
 
     chown -R root:root "$INSTALL_DIR"
     chmod 755 "$INSTALL_DIR"
@@ -160,10 +229,24 @@ install_python_app() {
 
     # Copy and set up helper scripts
     mkdir -p "$INSTALL_DIR/scripts"
-    cp "$SCRIPT_DIR/set-hostname.sh" "$INSTALL_DIR/scripts/"
-    chmod +x "$INSTALL_DIR/scripts/set-hostname.sh"
-    cp "$SCRIPT_DIR/restart-service.sh" "$INSTALL_DIR/scripts/"
-    chmod +x "$INSTALL_DIR/scripts/restart-service.sh"
+    for script in set-hostname.sh restart-service.sh configure-avahi.sh enable-printers.sh configure-samba.sh hotplug-printer.sh; do
+        if [[ -f "$SCRIPT_DIR/$script" ]]; then
+            cp "$SCRIPT_DIR/$script" "$INSTALL_DIR/scripts/"
+            chmod +x "$INSTALL_DIR/scripts/$script"
+        fi
+    done
+
+    # Copy config templates (used by configure-avahi.sh at runtime)
+    mkdir -p "$INSTALL_DIR/config/avahi"
+    if [[ -f "$PROJECT_DIR/config/avahi/airprint.service.template" ]]; then
+        cp "$PROJECT_DIR/config/avahi/airprint.service.template" "$INSTALL_DIR/config/avahi/"
+    fi
+
+    # Copy Samba config (used by configure-samba.sh at runtime)
+    mkdir -p "$INSTALL_DIR/config/samba"
+    if [[ -f "$PROJECT_DIR/config/samba/smb.conf" ]]; then
+        cp "$PROJECT_DIR/config/samba/smb.conf" "$INSTALL_DIR/config/samba/"
+    fi
 
     log_info "Python application installed"
 }
@@ -220,9 +303,27 @@ configure_cups() {
     bash "$SCRIPT_DIR/configure-cups.sh"
 }
 
+configure_samba() {
+    log_info "Configuring Samba for Windows printer sharing..."
+    bash "$SCRIPT_DIR/configure-samba.sh"
+}
+
 configure_avahi() {
     log_info "Configuring Avahi for AirPrint..."
     bash "$SCRIPT_DIR/configure-avahi.sh"
+}
+
+install_udev_rules() {
+    log_info "Installing udev rules for printer hotplug..."
+
+    if [[ -f "$PROJECT_DIR/config/udev/99-printer.rules" ]]; then
+        cp "$PROJECT_DIR/config/udev/99-printer.rules" /etc/udev/rules.d/
+        udevadm control --reload-rules 2>/dev/null || true
+        udevadm trigger 2>/dev/null || true
+        log_info "udev rules installed"
+    else
+        log_warn "udev rules file not found, skipping"
+    fi
 }
 
 install_systemd_service() {
@@ -242,6 +343,8 @@ install_systemd_service() {
     systemctl enable cups.service
     systemctl enable avahi-daemon.service
     systemctl enable --now printer-watchdog.timer
+    systemctl enable smbd.service nmbd.service 2>/dev/null || true
+    systemctl enable wsdd.service 2>/dev/null || true
 
     log_info "Systemd services configured"
 }
@@ -249,13 +352,21 @@ install_systemd_service() {
 configure_log_limits() {
     log_info "Configuring log retention limits..."
 
-    # journald: cap at 50M to prevent disk fill on small SD cards
+    # journald: enable persistent storage so logs survive reboots/freezes,
+    # then cap at 50M to prevent disk fill on small SD cards.
+    mkdir -p /var/log/journal
+    systemd-tmpfiles --create --prefix /var/log/journal 2>/dev/null || true
     mkdir -p /etc/systemd/journald.conf.d
     cat > /etc/systemd/journald.conf.d/printserver.conf << 'EOF'
 [Journal]
+Storage=persistent
 SystemMaxUse=50M
 RuntimeMaxUse=30M
 MaxRetentionSec=7day
+# Flush RAM buffer to disk every 30s instead of the default 5 minutes.
+# The Python app also writes directly to /var/log/printserver/app.log
+# (flushed per-line), so this is a secondary safety net for other services.
+SyncIntervalSec=30s
 EOF
     systemctl restart systemd-journald 2>/dev/null || true
 
@@ -268,6 +379,21 @@ EOF
     delaycompress
     missingok
     notifempty
+}
+EOF
+
+    # Printserver app.log rotation (Python RotatingFileHandler also rotates at
+    # 5 MB, but logrotate provides a system-level safety net and ensures
+    # old backups are cleaned up even if the service isn't running).
+    cat > /etc/logrotate.d/printserver-app << 'EOF'
+/var/log/printserver/app.log {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
 }
 EOF
 
@@ -395,6 +521,8 @@ start_services() {
     wait_for_cups 10 2
 
     systemctl start avahi-daemon
+    systemctl start smbd nmbd 2>/dev/null || true
+    systemctl start wsdd 2>/dev/null || true
     systemctl start printserver-web
 
     # Verify with health check
@@ -419,6 +547,11 @@ restart_services() {
     systemctl restart avahi-daemon
     sleep 1
 
+    # Restart Samba and WSD daemon for Windows sharing/discovery
+    systemctl restart smbd nmbd 2>/dev/null || true
+    systemctl restart wsdd 2>/dev/null || true
+    sleep 1
+
     # Restart web interface to apply code updates
     systemctl restart printserver-web
     sleep 2
@@ -430,7 +563,7 @@ restart_services() {
         log_info "All services restarted successfully"
     else
         log_warn "Some services may not have started correctly. Check status with:"
-        log_warn "  systemctl status cups avahi-daemon printserver-web"
+        log_warn "  systemctl status cups avahi-daemon smbd printserver-web"
     fi
 
     # Verify web interface health
@@ -471,10 +604,11 @@ detect_printer() {
             # permanently stuck in "failed" state after transient errors
             lpadmin -p "$PRINTER_NAME" -o printer-error-policy=retry-job 2>/dev/null || true
 
-            # Enable printer and set to accept jobs
-            log_info "Configuring printer to accept jobs..."
+            # Enable printer, accept jobs, and mark as shared for AirPrint/network discovery
+            log_info "Configuring printer to accept jobs and enable sharing..."
             cupsenable "$PRINTER_NAME" 2>/dev/null || true
             cupsaccept "$PRINTER_NAME" 2>/dev/null || true
+            lpadmin -p "$PRINTER_NAME" -o printer-is-shared=true 2>/dev/null || true
             log_info "Printer configured and ready"
             return 0
         fi
@@ -500,6 +634,7 @@ enable_all_printers() {
             log_info "Enabling printer: $printer"
             cupsenable "$printer" 2>/dev/null || true
             cupsaccept "$printer" 2>/dev/null || true
+            lpadmin -p "$printer" -o printer-is-shared=true 2>/dev/null || true
         fi
     done
 }
@@ -514,8 +649,19 @@ print_summary() {
     fi
     echo "========================================"
     echo
-    log_info "Web interface: http://$(hostname -I | awk '{print $1}'):5000"
-    log_info "CUPS admin:    http://$(hostname -I | awk '{print $1}'):631"
+    PI_IP=$(hostname -I | awk '{print $1}')
+    log_info "Web interface: http://${PI_IP}:5000"
+    log_info "CUPS admin:    http://${PI_IP}:631"
+    echo
+    log_info "── Windows printing ─────────────────────────────────────────"
+    log_info "  Recommended (IPP, no password needed):"
+    log_info "    Settings → Printers → Add → 'not listed' → 'by name' →"
+    log_info "    http://${PI_IP}:631/printers/<PrinterName>"
+    echo
+    log_info "  SMB path (File Explorer): \\\\${PI_IP}"
+    log_info "    Username: printuser"
+    log_info "    Password: printserver  (change: sudo smbpasswd printuser)"
+    log_info "─────────────────────────────────────────────────────────────"
     echo
     log_info "To check status: sudo systemctl status printserver-web"
     log_info "To view logs:    sudo journalctl -u printserver-web -f"
@@ -574,7 +720,8 @@ main() {
     configure_sudoers
     fix_hosts_file
     configure_cups
-    configure_avahi
+    configure_samba
+    install_udev_rules
     install_systemd_service
     configure_log_limits
     configure_system_tuning
@@ -587,6 +734,11 @@ main() {
         detect_printer
         enable_all_printers
     fi
+
+    # Configure Avahi AFTER printers are detected so service files
+    # are generated for any printer already connected at install time.
+    # On future hotplug events, udev triggers this script automatically.
+    configure_avahi
 
     print_summary
 }

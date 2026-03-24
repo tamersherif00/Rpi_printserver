@@ -1,17 +1,20 @@
-# udev rules for USB printer hotplug detection
+# udev rules for USB printer hotplug
+# /etc/udev/rules.d/99-printer.rules
 #
-# IMPORTANT: Only ONE rule restarts CUPS per hotplug event. The generic
-# bInterfaceClass=07 rule catches ALL USB printers (Brother, HP, Canon,
-# Epson, etc.) so vendor-specific rules are not needed and were removed
-# to prevent CUPS from restarting 5-6 times on a single plug-in event.
+# On connect:  hotplug-printer.sh add
+#   → restarts CUPS, waits for the scheduler, auto-adds the printer queue,
+#     enables job acceptance, marks as shared, then refreshes Avahi (mDNS).
+#   → Windows 10/11, iOS and Android discover the printer automatically once
+#     Avahi broadcasts the IPP/dnssd record.
+#
+# On disconnect: hotplug-printer.sh remove
+#   → CUPS queue is preserved so queued jobs survive a cable reconnect.
+#     Avahi is refreshed to remove stale mDNS advertisements.
 
-# --- Printer connection: single consolidated rule ---
-# Matches any USB printer (class 07), restarts CUPS once, regenerates
-# Avahi services, disables USB autosuspend, and logs the event.
+# Restart CUPS immediately so it can re-enumerate the USB device tree.
+# hotplug-printer.sh then waits for the scheduler before doing lpadmin work.
 SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", ACTION=="add", \
-    RUN+="/bin/systemctl restart cups.service", \
-    RUN+="/usr/bin/logger -t printer-hotplug 'USB printer connected, restarting CUPS'", \
-    MODE="0666"
+    RUN+="/bin/systemctl restart cups.service"
 
 # Disable USB autosuspend for printers — prevents sleep-related latency
 SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", ACTION=="add", \
@@ -19,11 +22,13 @@ SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", ACTION=="add", \
 SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", ACTION=="add", \
     TEST=="power/control", ATTR{power/control}="on"
 
-# Regenerate Avahi AirPrint services after CUPS has had time to detect
-# the new printer (run via a short delay script to avoid racing CUPS)
+# Run the full hotplug pipeline asynchronously (needs a live CUPS scheduler).
 SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", ACTION=="add", \
-    RUN+="/bin/sh -c 'sleep 3 && /opt/printserver/scripts/configure-avahi.sh &'"
+    RUN+="/bin/bash -c 'sleep 3 && /opt/printserver/scripts/hotplug-printer.sh add >> /var/log/printer-hotplug.log 2>&1 &'"
 
-# --- Printer disconnection: log only ---
-SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", ACTION=="remove", \
-    RUN+="/usr/bin/logger -t printer-hotplug 'USB printer disconnected'"
+# USB printer disconnect — ID_USB_INTERFACES survives after the class attr is gone.
+SUBSYSTEM=="usb", ENV{ID_USB_INTERFACES}=="*:070102:*", ACTION=="remove", \
+    RUN+="/bin/bash -c 'sleep 5 && /opt/printserver/scripts/hotplug-printer.sh remove >> /var/log/printer-hotplug.log 2>&1 &'"
+
+# Set read/write permissions on the raw USB device node for lp tools.
+SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", MODE="0666"

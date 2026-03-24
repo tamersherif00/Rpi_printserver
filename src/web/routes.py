@@ -19,31 +19,52 @@ from printserver.system_utils import (
     requires_root,
     SystemUtilsError,
 )
+from printserver.wol import (
+    list_devices as list_wol_devices,
+    add_device as add_wol_device,
+    update_device as update_wol_device,
+    remove_device as remove_wol_device,
+    send_magic_packet,
+    normalise_mac,
+)
 
 logger = logging.getLogger(__name__)
 
 # Allowed services for log viewing (whitelist to prevent command injection)
-ALLOWED_LOG_SERVICES = {"printserver-web", "cups", "avahi-daemon", "app", "cups-error"}
+ALLOWED_LOG_SERVICES = {"printserver-web", "cups", "avahi-daemon", "app", "cups-error", "smbd", "wsdd"}
 
 # Allowed services for restart (whitelist to prevent arbitrary service control)
-ALLOWED_RESTART_SERVICES = {"cups", "avahi-daemon", "printserver-web"}
+ALLOWED_RESTART_SERVICES = {"cups", "avahi-daemon", "printserver-web", "smbd", "wsdd"}
 
 # Path to the restart helper script
 RESTART_SCRIPT = "/opt/printserver/scripts/restart-service.sh"
 
-# Simple TTL cache for expensive subprocess-heavy functions
-_cache: dict[str, tuple[float, Any]] = {}
+# Simple TTL cache for expensive subprocess-heavy functions.
+# Each entry stores (timestamp, value, ttl) so eviction uses each entry's
+# own TTL rather than the current caller's TTL.
+_cache: dict[str, tuple[float, Any, float]] = {}
 
 
 def _cached_call(key: str, fn, ttl_seconds: float):
-    """Return cached result if fresh, otherwise call fn() and cache it."""
+    """Return cached result if fresh, otherwise call fn() and cache it.
+
+    Also evicts any fully-expired entries (older than 2× their own TTL) to
+    prevent the cache dict from holding stale large dicts indefinitely.
+    Each entry's TTL is stored alongside its value so that eviction is based
+    on the entry's own TTL, not the current caller's TTL.
+    """
     now = time.monotonic()
+    # Evict entries older than 2× their own stored TTL
+    expired = [k for k, (t, _, entry_ttl) in _cache.items() if now - t >= entry_ttl * 2]
+    for k in expired:
+        del _cache[k]
+
     if key in _cache:
-        cached_time, cached_value = _cache[key]
+        cached_time, cached_value, _ = _cache[key]
         if now - cached_time < ttl_seconds:
             return cached_value
     result = fn()
-    _cache[key] = (now, result)
+    _cache[key] = (now, result, ttl_seconds)
     return result
 
 
@@ -96,10 +117,11 @@ def _get_ip_address() -> str:
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.settimeout(2)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
+        try:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+        finally:
+            s.close()
     except Exception:
         return "127.0.0.1"
 
@@ -173,7 +195,10 @@ def get_server_status() -> dict[str, Any]:
             for line in result.stdout.split("\n"):
                 if "Signal level" in line:
                     if "%" in line:
-                        wifi_signal = int(line.split("%")[0].split("=")[-1])
+                        try:
+                            wifi_signal = int(line.split("%")[0].split("=")[-1])
+                        except (ValueError, IndexError):
+                            pass
                     break
     except Exception:
         pass
@@ -235,6 +260,9 @@ def _get_system_diagnostics() -> dict[str, Any]:
         "cups": _get_service_status("cups"),
         "avahi": _get_service_status("avahi-daemon"),
         "printserver": _get_service_status("printserver-web"),
+        # Windows discovery services: smbd (SMB/Samba) and wsdd (WSD auto-discovery)
+        "samba": _get_service_status("smbd"),
+        "wsdd": _get_service_status("wsdd"),
     }
 
     # CUPS connectivity
@@ -305,8 +333,9 @@ def _get_system_diagnostics() -> dict[str, Any]:
             ["ip", "route", "show", "default"],
             capture_output=True, text=True, timeout=3,
         )
-        if result.returncode == 0 and result.stdout.strip():
-            gateway = result.stdout.strip().split()[2]
+        parts = result.stdout.strip().split()
+        if result.returncode == 0 and len(parts) > 2:
+            gateway = parts[2]
             diag["network"]["gateway"] = gateway
             ping = subprocess.run(
                 ["ping", "-c", "1", "-W", "2", gateway],
@@ -352,12 +381,13 @@ def _get_system_diagnostics() -> dict[str, Any]:
                 lines = result.stdout.strip().split("\n")
                 if len(lines) >= 2:
                     parts = lines[1].split()
-                    diag["storage"][mount] = {
-                        "total_mb": int(parts[1].rstrip("M")),
-                        "used_mb": int(parts[2].rstrip("M")),
-                        "available_mb": int(parts[3].rstrip("M")),
-                        "used_percent": parts[4],
-                    }
+                    if len(parts) >= 5:
+                        diag["storage"][mount] = {
+                            "total_mb": int(parts[1].rstrip("M")),
+                            "used_mb": int(parts[2].rstrip("M")),
+                            "available_mb": int(parts[3].rstrip("M")),
+                            "used_percent": parts[4],
+                        }
         except Exception:
             pass
 
@@ -451,8 +481,14 @@ def register_routes(app: Flask) -> None:
 
         try:
             client = get_cups_client(app)
-            printers = get_all_printers(client)
-            jobs = get_all_jobs(client, which_jobs="all")
+            printers = _cached_call("printers_all", lambda: get_all_printers(client), 30)
+            # Use "not-completed" to avoid caching the full CUPS job history
+            # (which can be 500+ objects). Status only needs active/pending counts.
+            jobs = _cached_call(
+                "jobs_active",
+                lambda: get_all_jobs(client, which_jobs="not-completed"),
+                30,
+            )
         except CupsClientError as e:
             cups_error = True
             printers = []
@@ -525,7 +561,10 @@ def register_routes(app: Flask) -> None:
 
             # Get filter parameters
             status = request.args.get("status", "all")
-            limit = min(int(request.args.get("limit", 50)), 100)
+            try:
+                limit = min(int(request.args.get("limit", 50)), 100)
+            except (ValueError, TypeError):
+                limit = 50
 
             # Map status filter
             if status == "pending":
@@ -535,8 +574,7 @@ def register_routes(app: Flask) -> None:
             else:
                 which_jobs = "all"
 
-            jobs = get_all_jobs(client, which_jobs=which_jobs)
-            jobs = jobs[:limit]
+            jobs = get_all_jobs(client, which_jobs=which_jobs, limit=limit)
 
             return jsonify([j.to_dict() for j in jobs])
         except CupsClientError as e:
@@ -556,7 +594,12 @@ def register_routes(app: Flask) -> None:
 
     @app.route("/api/jobs/<int:job_id>", methods=["DELETE"])
     def api_cancel_job(job_id: int):
-        """Cancel a print job."""
+        """Cancel a print job.
+
+        Query params:
+            purge: 'true' to forcibly purge stuck or stopped jobs.
+        """
+        purge = request.args.get("purge", "false").lower() == "true"
         try:
             client = get_cups_client(app)
             job = get_job(client, job_id)
@@ -570,17 +613,56 @@ def register_routes(app: Flask) -> None:
                     "code": "INVALID_STATE"
                 }), 400
 
-            success = cancel_print_job(client, job_id)
+            success = cancel_print_job(client, job_id, purge=purge)
             if success:
                 return jsonify({
                     "success": True,
-                    "message": f"Job {job_id} canceled"
+                    "message": f"Job {job_id} {'purged' if purge else 'canceled'}"
                 })
             return jsonify({
                 "error": "Failed to cancel job",
                 "code": "CANCEL_FAILED"
             }), 500
         except CupsClientError as e:
+            return jsonify({"error": str(e), "code": "CUPS_ERROR"}), 500
+
+    @app.route("/api/jobs", methods=["DELETE"])
+    def api_cancel_all_jobs():
+        """Cancel all jobs on a printer (clears stuck queue).
+
+        Query params:
+            printer: Printer name (required).
+            purge: 'false' to skip purge (default: true).
+        """
+        printer_name = request.args.get("printer", "")
+        if not printer_name:
+            return jsonify({"error": "Missing 'printer' query parameter",
+                            "code": "INVALID_REQUEST"}), 400
+        purge = request.args.get("purge", "true").lower() != "false"
+        try:
+            client = get_cups_client(app)
+            client.cancel_all_jobs(printer_name, purge=purge)
+            return jsonify({"success": True,
+                            "message": f"All jobs on '{printer_name}' cleared"})
+        except CupsClientError as e:
+            return jsonify({"error": str(e), "code": "CUPS_ERROR"}), 500
+
+    @app.route("/api/printers/<name>/accept", methods=["POST"])
+    def api_accept_printer(name: str):
+        """Enable printer and make it accept jobs (fixes 'accepting jobs: no').
+
+        Equivalent to cupsenable + cupsaccept.
+        """
+        try:
+            client = get_cups_client(app)
+            printer = get_printer(client, name)
+            if not printer:
+                return jsonify({"error": "Printer not found", "code": "NOT_FOUND"}), 404
+            client.accept_printer(name)
+            return jsonify({"success": True,
+                            "message": f"Printer '{name}' enabled and accepting jobs"})
+        except CupsClientError as e:
+            logger.error(f"Accept printer failed for '{name}': {e}")
             return jsonify({"error": str(e), "code": "CUPS_ERROR"}), 500
 
     @app.route("/health")
@@ -614,6 +696,59 @@ def register_routes(app: Flask) -> None:
         """Get comprehensive system diagnostics snapshot."""
         return jsonify(_cached_call("diagnostics", _get_system_diagnostics, 15))
 
+    @app.route("/api/memory")
+    def api_memory():
+        """Get current process and system memory stats.
+
+        Useful for monitoring memory health without SSH access.
+        """
+        import gc as _gc
+        import resource as _resource
+
+        # Current process RSS: read from /proc/self/statm (field[1] = RSS pages).
+        # ru_maxrss on Linux returns the historical PEAK, not the current RSS,
+        # so it never decreases and gives operators a false picture.
+        try:
+            with open("/proc/self/statm") as _f:
+                rss_mb = round(int(_f.read().split()[1]) * 4096 / (1024 * 1024), 1)
+        except Exception:
+            # Fallback to peak RSS if /proc is unavailable (e.g. macOS dev box)
+            rss_kb = _resource.getrusage(_resource.RUSAGE_SELF).ru_maxrss
+            rss_mb = round(rss_kb / 1024, 1)
+
+        # System-wide memory from /proc/meminfo
+        sys_mem: dict[str, int] = {}
+        try:
+            with open("/proc/meminfo") as f:
+                for line in f:
+                    if ":" in line:
+                        k, v = line.split(":", 1)
+                        parts = v.strip().split()
+                        sys_mem[k.strip()] = int(parts[0]) if parts else 0
+        except Exception:
+            pass
+
+        total_kb = sys_mem.get("MemTotal", 0)
+        available_kb = sys_mem.get("MemAvailable", 0)
+
+        return jsonify({
+            "process": {
+                "rss_mb": rss_mb,
+            },
+            "system": {
+                "total_mb": total_kb // 1024,
+                "available_mb": available_kb // 1024,
+                "used_percent": (
+                    round((1 - available_kb / total_kb) * 100, 1)
+                    if total_kb > 0 else 0
+                ),
+            },
+            "gc": {
+                "counts": list(_gc.get_count()),
+                "cache_entries": len(_cache),
+            },
+        })
+
     @app.route("/api/logs")
     def api_logs():
         """Get service logs from journald or in-memory ring buffer.
@@ -623,7 +758,10 @@ def register_routes(app: Flask) -> None:
             lines: Number of lines to return (default: 100, max: 500)
         """
         service = request.args.get("service", "printserver-web")
-        lines = min(int(request.args.get("lines", 100)), 500)
+        try:
+            lines = min(int(request.args.get("lines", 100)), 500)
+        except (ValueError, TypeError):
+            lines = 100
 
         if service not in ALLOWED_LOG_SERVICES:
             return jsonify({
@@ -906,5 +1044,81 @@ def register_routes(app: Flask) -> None:
             })
         except CupsClientError as e:
             return jsonify({"error": str(e), "code": "CUPS_ERROR"}), 500
+
+    # ── Wake-on-LAN ───────────────────────────────────────────────────────────
+
+    @app.route("/wol")
+    def wol():
+        """Wake-on-LAN page — manage and wake saved devices."""
+        return render_template("wol.html", devices=list_wol_devices())
+
+    @app.route("/api/wol/devices", methods=["GET"])
+    def api_wol_devices_list():
+        """Return all saved WOL devices."""
+        return jsonify(list_wol_devices())
+
+    @app.route("/api/wol/devices", methods=["POST"])
+    def api_wol_devices_add():
+        """Save a new WOL device. Body: {name, mac, ip?}"""
+        data = request.get_json(silent=True) or {}
+        name = str(data.get("name", "")).strip()
+        mac  = str(data.get("mac",  "")).strip()
+        ip   = str(data.get("ip",   "")).strip()
+
+        if not name or not mac:
+            return jsonify({"error": "name and mac are required"}), 400
+        try:
+            device = add_wol_device(name, mac, ip)
+            return jsonify(device), 201
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        except OSError as exc:
+            logger.error("Could not write WOL devices file: %s", exc)
+            return jsonify({"error": "Could not save device (storage error)"}), 500
+
+    @app.route("/api/wol/devices/<device_id>", methods=["PUT"])
+    def api_wol_devices_update(device_id: str):
+        """Update a saved WOL device. Body: {name, mac, ip?}"""
+        data = request.get_json(silent=True) or {}
+        name = str(data.get("name", "")).strip()
+        mac  = str(data.get("mac",  "")).strip()
+        ip   = str(data.get("ip",   "")).strip()
+
+        if not name or not mac:
+            return jsonify({"error": "name and mac are required"}), 400
+        try:
+            device = update_wol_device(device_id, name, mac, ip)
+            return jsonify(device)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        except OSError as exc:
+            logger.error("Could not write WOL devices file: %s", exc)
+            return jsonify({"error": "Could not save device (storage error)"}), 500
+
+    @app.route("/api/wol/devices/<device_id>", methods=["DELETE"])
+    def api_wol_devices_delete(device_id: str):
+        """Remove a saved WOL device by ID."""
+        removed = remove_wol_device(device_id)
+        if not removed:
+            return jsonify({"error": "Device not found"}), 404
+        return jsonify({"ok": True})
+
+    @app.route("/api/wol/wake", methods=["POST"])
+    def api_wol_wake():
+        """Send a WOL magic packet. Body: {mac, broadcast?}"""
+        data = request.get_json(silent=True) or {}
+        mac       = str(data.get("mac",       "")).strip()
+        broadcast = str(data.get("broadcast", "255.255.255.255")).strip()
+
+        if not mac:
+            return jsonify({"error": "mac is required"}), 400
+        try:
+            send_magic_packet(mac, broadcast)
+            return jsonify({"ok": True, "mac": normalise_mac(mac)})
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        except OSError as exc:
+            logger.error("WOL socket error: %s", exc)
+            return jsonify({"error": f"Socket error: {exc}"}), 500
 
     logger.info("Routes registered")
