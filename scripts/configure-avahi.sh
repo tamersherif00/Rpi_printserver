@@ -147,7 +147,8 @@ generate_airprint_service() {
 <service-group>
   <name replace-wildcards="yes">$printer_info @ %h</name>
 
-  <!-- AirPrint service -->
+  <!-- AirPrint / IPP Everywhere (iOS, Android, Windows, Chrome OS) -->
+  <!-- Only _ipp._tcp — no _ipps (no TLS cert) or _printer (no LPR) -->
   <service>
     <type>_ipp._tcp</type>
     <subtype>_universal._sub._ipp._tcp</subtype>
@@ -171,23 +172,6 @@ generate_airprint_service() {
     <txt-record>Sort=F</txt-record>
     <txt-record>Scan=F</txt-record>
     <txt-record>Fax=F</txt-record>
-    <txt-record>TLS=1.2</txt-record>
-  </service>
-
-  <!-- IPP Everywhere (for Android/Chrome) -->
-  <service>
-    <type>_ipps._tcp</type>
-    <subtype>_universal._sub._ipps._tcp</subtype>
-    <port>631</port>
-    <txt-record>txtvers=1</txt-record>
-    <txt-record>qtotal=1</txt-record>
-    <txt-record>rp=printers/$printer_name</txt-record>
-    <txt-record>ty=$printer_info</txt-record>
-    <txt-record>adminurl=https://$hostname.local:631/printers/$printer_name</txt-record>
-    <txt-record>note=$printer_location</txt-record>
-    <txt-record>pdl=application/octet-stream,application/pdf,application/postscript,image/gif,image/jpeg,image/png,image/tiff,image/urf,application/vnd.cups-banner,application/vnd.cups-pdf,application/vnd.cups-postscript,application/vnd.cups-raw</txt-record>
-    <txt-record>URF=W8,SRGB24,CP1,RS300</txt-record>
-    <txt-record>TLS=1.2</txt-record>
   </service>
 </service-group>
 EOF

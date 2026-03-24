@@ -8,11 +8,19 @@
     {{PRINTER_INFO}} - Printer make/model description
     {{PRINTER_LOCATION}} - Physical location of printer
     {{HOSTNAME}} - Server hostname
+
+  NOTE: Only _ipp._tcp is advertised. _ipps._tcp (TLS) and _printer._tcp
+  (LPR/port 515) are intentionally omitted:
+  - _ipps requires a valid TLS cert; without one, Windows tries TLS first,
+    waits ~60s for timeout, then falls back to plain IPP — adding over a
+    minute to "Add Printer".
+  - _printer._tcp advertises LPR on port 515 which we don't serve, causing
+    another timeout cycle on clients that try it.
 -->
 <service-group>
   <name replace-wildcards="yes">{{PRINTER_INFO}} @ %h</name>
 
-  <!-- AirPrint service (iOS devices) -->
+  <!-- AirPrint / IPP Everywhere service (iOS, Android, Windows, Chrome OS) -->
   <service>
     <type>_ipp._tcp</type>
     <subtype>_universal._sub._ipp._tcp</subtype>
@@ -39,31 +47,5 @@
     <txt-record>Sort=F</txt-record>
     <txt-record>Scan=F</txt-record>
     <txt-record>Fax=F</txt-record>
-    <txt-record>TLS=1.2</txt-record>
-  </service>
-
-  <!-- IPP Everywhere service (Android, Chrome OS) -->
-  <service>
-    <type>_ipps._tcp</type>
-    <subtype>_universal._sub._ipps._tcp</subtype>
-    <port>631</port>
-    <txt-record>txtvers=1</txt-record>
-    <txt-record>qtotal=1</txt-record>
-    <txt-record>rp=printers/{{PRINTER_NAME}}</txt-record>
-    <txt-record>ty={{PRINTER_INFO}}</txt-record>
-    <txt-record>adminurl=https://{{HOSTNAME}}.local:631/printers/{{PRINTER_NAME}}</txt-record>
-    <txt-record>note={{PRINTER_LOCATION}}</txt-record>
-    <txt-record>pdl=application/octet-stream,application/pdf,application/postscript,image/gif,image/jpeg,image/png,image/tiff,image/urf,application/vnd.cups-banner,application/vnd.cups-pdf,application/vnd.cups-postscript,application/vnd.cups-raw</txt-record>
-    <txt-record>URF=W8,SRGB24,CP1,RS300</txt-record>
-    <txt-record>TLS=1.2</txt-record>
-  </service>
-
-  <!-- Printer discovery via DNS-SD -->
-  <service>
-    <type>_printer._tcp</type>
-    <port>515</port>
-    <txt-record>txtvers=1</txt-record>
-    <txt-record>qtotal=1</txt-record>
-    <txt-record>ty={{PRINTER_INFO}}</txt-record>
   </service>
 </service-group>

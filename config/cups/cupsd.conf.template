@@ -32,8 +32,11 @@ DNSSDPort 631
 # (Windows re-establishes TCP often during driver negotiation)
 MaxHoldTime 60
 
-# Default authentication
-DefaultAuthType Basic
+# No authentication for print operations — this is a local network print
+# server. Basic auth causes Windows to receive a 401 challenge on
+# Get-Printer-Attributes during "Add Printer", triggering retry loops
+# that add 30-60s. Admin pages still require auth via their Location blocks.
+DefaultAuthType None
 
 # Web interface settings
 WebInterface Yes
