@@ -60,4 +60,20 @@ recover_printers() {
     fi
 }
 
+cleanup_old_jobs() {
+    # Purge completed jobs older than 1 hour to free memory and disk on 1GB Pi.
+    # CUPS keeps job metadata in RAM; hundreds of stale jobs cause bloat.
+    local purged=0
+    while IFS= read -r job_entry; do
+        job_id=$(echo "$job_entry" | awk '{print $1}' | cut -d'-' -f2)
+        if [[ -n "$job_id" ]]; then
+            cancel -x "$job_id" 2>/dev/null && ((purged++)) || true
+        fi
+    done < <(lpstat -W completed -o 2>/dev/null)
+    if [[ $purged -gt 0 ]]; then
+        log_info "Purged $purged completed job(s)"
+    fi
+}
+
 recover_printers
+cleanup_old_jobs

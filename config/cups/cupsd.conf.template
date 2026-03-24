@@ -48,10 +48,10 @@ WebInterface Yes
 # until someone manually re-enables it.
 ErrorPolicy retry-job
 
-# Preserve jobs across restarts
+# Preserve jobs across restarts (conservative for 1GB Pi)
 PreserveJobHistory Yes
-PreserveJobFiles 1d
-MaxJobs 500
+PreserveJobFiles 1h
+MaxJobs 100
 
 # Limit access to the server
 <Location />

@@ -19,8 +19,9 @@ JOB_STATE_CANCELED = 7
 JOB_STATE_ABORTED = 8
 JOB_STATE_COMPLETED = 9
 
-# Connection staleness threshold (seconds)
-MAX_CONNECTION_AGE = 300
+# Connection staleness threshold (seconds) — keep short so we detect
+# CUPS restarts quickly without serving stale connections
+MAX_CONNECTION_AGE = 120
 
 
 class CupsClientError(Exception):

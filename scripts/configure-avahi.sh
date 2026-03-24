@@ -172,6 +172,8 @@ generate_airprint_service() {
     <txt-record>Sort=F</txt-record>
     <txt-record>Scan=F</txt-record>
     <txt-record>Fax=F</txt-record>
+    <txt-record>PaperMax=legal-A4</txt-record>
+    <txt-record>kind=document</txt-record>
   </service>
 </service-group>
 EOF

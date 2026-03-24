@@ -99,10 +99,11 @@ configure_cups_browsed() {
     log_info "Tuning cups-browsed for faster discovery..."
 
     # Reduce browse interval: how often we broadcast our printers (default 30s)
+    # 5s keeps us visible between Windows scan cycles (every 5-10s)
     if grep -q "^BrowseInterval" "$browsed_conf"; then
-        sed -i 's/^BrowseInterval.*/BrowseInterval 10/' "$browsed_conf"
+        sed -i 's/^BrowseInterval.*/BrowseInterval 5/' "$browsed_conf"
     else
-        echo "BrowseInterval 10" >> "$browsed_conf"
+        echo "BrowseInterval 5" >> "$browsed_conf"
     fi
 
     # Reduce timeout for remote printers (default 300s)

@@ -37,7 +37,8 @@
     <txt-record>pdl=application/octet-stream,application/pdf,application/postscript,image/gif,image/jpeg,image/png,image/tiff,image/urf,application/vnd.cups-banner,application/vnd.cups-pdf,application/vnd.cups-postscript,application/vnd.cups-raw</txt-record>
     <!-- URF (Universal Raster Format) capabilities for AirPrint -->
     <txt-record>URF=W8,SRGB24,CP1,RS300</txt-record>
-    <!-- Printer capabilities -->
+    <!-- Printer capabilities — explicitly declare everything so clients
+         don't need extra IPP queries to discover what's supported -->
     <txt-record>Color=T</txt-record>
     <txt-record>Duplex=F</txt-record>
     <txt-record>Copies=T</txt-record>
@@ -47,5 +48,8 @@
     <txt-record>Sort=F</txt-record>
     <txt-record>Scan=F</txt-record>
     <txt-record>Fax=F</txt-record>
+    <!-- Paper handling — prevents extra Get-Printer-Attributes round-trips -->
+    <txt-record>PaperMax=legal-A4</txt-record>
+    <txt-record>kind=document</txt-record>
   </service>
 </service-group>

@@ -14,16 +14,16 @@ Environment=FLASK_ENV=production
 Environment=PYTHONPATH=/opt/printserver
 Environment=PRINTSERVER_CONFIG=/etc/printserver/config.ini
 
-# Wait for CUPS to be ready before starting (up to 20s, then start anyway)
-ExecStartPre=/bin/sh -c 'for i in 1 2 3 4 5 6 7 8 9 10; do lpstat -r 2>/dev/null && exit 0; sleep 2; done; echo "CUPS not ready after 20s, starting anyway"; exit 0'
+# Wait for CUPS to be ready before starting (fast exponential poll: 0.5, 1, 2, 2, 2... up to ~10s)
+ExecStartPre=/bin/sh -c 'delay=0.5; for i in 1 2 3 4 5 6; do systemctl is-active cups >/dev/null 2>&1 && exit 0; sleep $delay; delay=$(echo "$delay 2" | awk "{d=\$1*\$2; print (d>2?2:d)}"); done; exit 0'
 ExecStart=/opt/printserver/venv/bin/gunicorn \
     --workers 2 \
     --threads 2 \
     --worker-class gthread \
     --bind 0.0.0.0:5000 \
-    --timeout 30 \
+    --timeout 15 \
     --graceful-timeout 10 \
-    --keep-alive 5 \
+    --keep-alive 2 \
     --max-requests 1000 \
     --max-requests-jitter 50 \
     --access-logfile - \

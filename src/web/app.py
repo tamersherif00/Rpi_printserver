@@ -105,7 +105,7 @@ def create_app(config_override: dict = None) -> Flask:
                 host=app.config.get("CUPS_HOST", "localhost"),
                 port=app.config.get("CUPS_PORT", 631),
             )
-            client.connect_with_retry(max_retries=2, base_delay=1.0, max_delay=5.0)
+            client.connect_with_retry(max_retries=3, base_delay=0.5, max_delay=2.0)
             app._cups_client = client
             logger.info("Initial CUPS connection established")
         except CupsClientError as e:
