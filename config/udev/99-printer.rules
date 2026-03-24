@@ -38,6 +38,12 @@ KERNEL=="lp[0-9]*", SUBSYSTEM=="usb", ACTION=="add", \
 # Set proper permissions for printer devices
 SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", MODE="0666"
 
+# Disable USB autosuspend for printers — prevents sleep-related latency
+SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", ACTION=="add", \
+    TEST=="power/autosuspend", ATTR{power/autosuspend}="-1"
+SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", ACTION=="add", \
+    TEST=="power/control", ATTR{power/control}="on"
+
 # Trigger Avahi to regenerate AirPrint services when printer is added
 SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", ACTION=="add", \
     RUN+="/opt/printserver/scripts/configure-avahi.sh"

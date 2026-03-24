@@ -230,10 +230,18 @@ install_systemd_service() {
 
     cp "$PROJECT_DIR/config/systemd/printserver-web.service" /etc/systemd/system/
 
+    # Install printer watchdog timer — auto-recovers printers stuck in
+    # "stopped" or "failed" state (e.g. after USB sleep or transient error)
+    cp "$PROJECT_DIR/config/systemd/printer-watchdog.service" /etc/systemd/system/
+    cp "$PROJECT_DIR/config/systemd/printer-watchdog.timer" /etc/systemd/system/
+    cp "$SCRIPT_DIR/printer-watchdog.sh" "$INSTALL_DIR/scripts/"
+    chmod +x "$INSTALL_DIR/scripts/printer-watchdog.sh"
+
     systemctl daemon-reload
     systemctl enable printserver-web.service
     systemctl enable cups.service
     systemctl enable avahi-daemon.service
+    systemctl enable --now printer-watchdog.timer
 
     log_info "Systemd services configured"
 }
@@ -283,7 +291,79 @@ configure_system_tuning() {
         fi
     done
 
+    # --- WiFi power management: disable power save ---
+    # WiFi power-save mode delays mDNS multicast responses, causing slow
+    # printer discovery on Windows/iOS (can add 30-60s to "Add Printer").
+    configure_wifi_performance
+
+    # --- USB autosuspend: keep printer awake ---
+    # Prevents the kernel from suspending the USB printer port, which adds
+    # wake-up latency when a print job arrives after idle time.
+    configure_usb_power
+
     log_info "System tuning applied"
+}
+
+configure_wifi_performance() {
+    log_info "Disabling WiFi power management for faster discovery..."
+
+    # Method 1: NetworkManager dispatcher (persists across reboots)
+    local nm_dispatcher="/etc/NetworkManager/dispatcher.d/99-wifi-powersave-off"
+    if command -v nmcli &> /dev/null; then
+        cat > "$nm_dispatcher" << 'NMEOF'
+#!/bin/bash
+# Disable WiFi power save so mDNS responses are instant
+if [ "$2" = "up" ] && [ "$(nmcli -t -f TYPE con show --active | grep wireless)" ]; then
+    iw dev wlan0 set power_save off 2>/dev/null || true
+fi
+NMEOF
+        chmod +x "$nm_dispatcher"
+        log_info "Created NetworkManager dispatcher for WiFi power-save"
+    fi
+
+    # Method 2: udev rule (works even without NetworkManager)
+    local udev_wifi="/etc/udev/rules.d/70-wifi-powersave.rules"
+    cat > "$udev_wifi" << 'UDEVEOF'
+# Disable WiFi power-save on interface up — ensures fast mDNS responses
+ACTION=="add", SUBSYSTEM=="net", KERNEL=="wlan*", RUN+="/usr/sbin/iw dev %k set power_save off"
+UDEVEOF
+    log_info "Created udev rule for WiFi power-save"
+
+    # Method 3: Apply immediately
+    if ip link show wlan0 &> /dev/null; then
+        iw dev wlan0 set power_save off 2>/dev/null || true
+        log_info "WiFi power-save disabled on wlan0"
+    fi
+}
+
+configure_usb_power() {
+    log_info "Disabling USB autosuspend for printers..."
+
+    # Disable USB autosuspend for printer class devices so the printer
+    # doesn't go into a low-power state between print jobs.
+    local udev_usb="/etc/udev/rules.d/71-usb-printer-power.rules"
+    cat > "$udev_usb" << 'USBEOF'
+# Keep USB printers awake — disable kernel autosuspend for printer class (07)
+ACTION=="add", SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", TEST=="power/autosuspend", ATTR{power/autosuspend}="-1"
+ACTION=="add", SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", TEST=="power/control", ATTR{power/control}="on"
+USBEOF
+    log_info "Created udev rule to keep USB printers awake"
+
+    # Apply to currently connected printers
+    for dev in /sys/bus/usb/devices/*/bInterfaceClass; do
+        if [[ -f "$dev" ]] && [[ "$(cat "$dev" 2>/dev/null)" == "07" ]]; then
+            local parent
+            parent=$(dirname "$dev")
+            parent=$(dirname "$parent")
+            if [[ -f "$parent/power/autosuspend" ]]; then
+                echo -1 > "$parent/power/autosuspend" 2>/dev/null || true
+            fi
+            if [[ -f "$parent/power/control" ]]; then
+                echo "on" > "$parent/power/control" 2>/dev/null || true
+            fi
+            log_info "Disabled autosuspend for connected USB printer"
+        fi
+    done
 }
 
 wait_for_cups() {
@@ -386,6 +466,10 @@ detect_printer() {
             else
                 log_info "Printer '$PRINTER_NAME' already configured"
             fi
+
+            # Set error policy to retry-job so the printer doesn't get
+            # permanently stuck in "failed" state after transient errors
+            lpadmin -p "$PRINTER_NAME" -o printer-error-policy=retry-job 2>/dev/null || true
 
             # Enable printer and set to accept jobs
             log_info "Configuring printer to accept jobs..."

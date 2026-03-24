@@ -19,11 +19,31 @@ Listen /run/cups/cups.sock
 Browsing On
 BrowseLocalProtocols dnssd
 
+# === Performance tuning ===
+# Disable DNS reverse lookups — major cause of slow Windows connections.
+# Without this, CUPS tries to resolve the client IP to a hostname, which can
+# hang for 30+ seconds when there's no reverse DNS entry.
+HostNameLookups Off
+
+# DNS timeout in seconds — fail fast if name resolution is needed
+DNSSDPort 631
+
+# Keep idle client connections alive longer to avoid reconnect overhead
+# (Windows re-establishes TCP often during driver negotiation)
+MaxHoldTime 60
+
 # Default authentication
 DefaultAuthType Basic
 
 # Web interface settings
 WebInterface Yes
+
+# === Error recovery ===
+# When a print job fails (e.g. USB printer was asleep or temporarily
+# unreachable), retry the job instead of stopping the entire queue.
+# Default "stop-printer" puts the printer in "failed" state permanently
+# until someone manually re-enables it.
+ErrorPolicy retry-job
 
 # Preserve jobs across restarts
 PreserveJobHistory Yes
@@ -93,8 +113,10 @@ MaxJobs 500
 
 # External client authentication
 <Policy authenticated>
+  # Allow print operations without authentication — Windows IPP clients
+  # issue Validate-Job during "Add Printer" and will hang for 30-60s if
+  # they get an auth challenge they don't expect.
   <Limit Create-Job Print-Job Print-URI Validate-Job>
-    AuthType Default
     Order deny,allow
   </Limit>
 

@@ -50,7 +50,38 @@ configure_avahi_daemon() {
             :
         fi
 
-        log_info "Avahi daemon configured"
+        # --- Performance tuning for faster discovery ---
+
+        # Enable reflector so mDNS works across subnets/VLANs
+        if grep -q "^#enable-reflector=" "$AVAHI_CONFIG"; then
+            sed -i 's/^#enable-reflector=.*/enable-reflector=yes/' "$AVAHI_CONFIG"
+        elif grep -q "^enable-reflector=" "$AVAHI_CONFIG"; then
+            sed -i 's/^enable-reflector=.*/enable-reflector=yes/' "$AVAHI_CONFIG"
+        fi
+
+        # Cache entries for faster repeated lookups
+        if grep -q "^cache-entries-max=" "$AVAHI_CONFIG"; then
+            sed -i 's/^cache-entries-max=.*/cache-entries-max=256/' "$AVAHI_CONFIG"
+        elif grep -q "^#cache-entries-max=" "$AVAHI_CONFIG"; then
+            sed -i 's/^#cache-entries-max=.*/cache-entries-max=256/' "$AVAHI_CONFIG"
+        fi
+
+        # Publish hostname and IP addresses for faster resolution
+        if grep -q "^publish-addresses=" "$AVAHI_CONFIG"; then
+            sed -i 's/^publish-addresses=.*/publish-addresses=yes/' "$AVAHI_CONFIG"
+        elif grep -q "^#publish-addresses=" "$AVAHI_CONFIG"; then
+            sed -i 's/^#publish-addresses=.*/publish-addresses=yes/' "$AVAHI_CONFIG"
+        fi
+
+        # Disable IPv6 if not needed — reduces multicast traffic and speeds up
+        # discovery on IPv4-only networks (most home networks)
+        if grep -q "^use-ipv6=" "$AVAHI_CONFIG"; then
+            sed -i 's/^use-ipv6=.*/use-ipv6=no/' "$AVAHI_CONFIG"
+        elif grep -q "^#use-ipv6=" "$AVAHI_CONFIG"; then
+            sed -i 's/^#use-ipv6=.*/use-ipv6=no/' "$AVAHI_CONFIG"
+        fi
+
+        log_info "Avahi daemon configured with performance tuning"
     else
         log_warn "Avahi config not found at $AVAHI_CONFIG"
     fi

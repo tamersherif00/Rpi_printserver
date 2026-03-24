@@ -1,0 +1,9 @@
+[Unit]
+Description=Printer Health Watchdog
+After=cups.service
+Requires=cups.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/printserver/scripts/printer-watchdog.sh
+TimeoutStartSec=30

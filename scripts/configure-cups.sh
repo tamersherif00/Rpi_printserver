@@ -83,6 +83,42 @@ configure_ipp() {
     else
         systemctl enable cups-browsed 2>/dev/null || true
     fi
+
+    # Tune cups-browsed for faster printer discovery responses
+    configure_cups_browsed
+}
+
+configure_cups_browsed() {
+    local browsed_conf="/etc/cups/cups-browsed.conf"
+
+    if [[ ! -f "$browsed_conf" ]]; then
+        log_info "cups-browsed.conf not found, skipping tuning"
+        return 0
+    fi
+
+    log_info "Tuning cups-browsed for faster discovery..."
+
+    # Reduce browse interval: how often we broadcast our printers (default 30s)
+    if grep -q "^BrowseInterval" "$browsed_conf"; then
+        sed -i 's/^BrowseInterval.*/BrowseInterval 10/' "$browsed_conf"
+    else
+        echo "BrowseInterval 10" >> "$browsed_conf"
+    fi
+
+    # Reduce timeout for remote printers (default 300s)
+    if grep -q "^BrowseTimeout" "$browsed_conf"; then
+        sed -i 's/^BrowseTimeout.*/BrowseTimeout 30/' "$browsed_conf"
+    else
+        echo "BrowseTimeout 30" >> "$browsed_conf"
+    fi
+
+    # Use DNSSD for browsing (most reliable with Avahi)
+    if ! grep -q "^BrowseRemoteProtocols" "$browsed_conf"; then
+        echo "BrowseRemoteProtocols dnssd cups" >> "$browsed_conf"
+    fi
+
+    systemctl restart cups-browsed 2>/dev/null || true
+    log_info "cups-browsed tuned for faster discovery"
 }
 
 configure_samba() {
@@ -145,6 +181,20 @@ configure_job_preservation() {
     fi
 }
 
+configure_error_recovery() {
+    log_info "Configuring error recovery for all printers..."
+
+    # Set ErrorPolicy to retry-job on each existing printer.
+    # This prevents printers from going into permanent "failed" state
+    # when a transient error occurs (USB sleep, timeout, etc.)
+    lpstat -p 2>/dev/null | awk '{print $2}' | while read -r printer; do
+        if [[ -n "$printer" ]]; then
+            lpadmin -p "$printer" -o printer-error-policy=retry-job 2>/dev/null || true
+            log_info "Set retry-job error policy on: $printer"
+        fi
+    done
+}
+
 restart_cups() {
     log_info "Restarting CUPS service..."
     systemctl restart cups
@@ -157,6 +207,11 @@ restart_cups() {
     else
         log_warn "CUPS may not have started correctly"
         systemctl status cups
+    fi
+
+    # Also restart cups-browsed if running (picks up new config)
+    if systemctl is-active cups-browsed > /dev/null 2>&1; then
+        systemctl restart cups-browsed 2>/dev/null || true
     fi
 }
 
@@ -187,6 +242,7 @@ main() {
     configure_job_preservation
     add_user_to_lpadmin
     restart_cups
+    configure_error_recovery
 
     log_info "CUPS configuration complete"
 }
