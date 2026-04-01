@@ -25,9 +25,6 @@ BrowseLocalProtocols dnssd
 # hang for 30+ seconds when there's no reverse DNS entry.
 HostNameLookups Off
 
-# DNS timeout in seconds — fail fast if name resolution is needed
-DNSSDPort 631
-
 # Keep idle client connections alive longer to avoid reconnect overhead
 # (Windows re-establishes TCP often during driver negotiation)
 MaxHoldTime 60

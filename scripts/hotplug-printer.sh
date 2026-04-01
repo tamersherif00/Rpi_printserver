@@ -77,13 +77,23 @@ add_printer() {
         log "Queue '$name' already exists — skipping lpadmin"
     fi
 
-    # Enable sharing for every configured queue (handles pre-existing queues too)
+    # Enable sharing for every real USB/IPP queue.
+    # Skip ghost queues pointing to /dev/null (created by failed hotplug
+    # attempts) — enabling them causes Windows to see phantom printers.
     while IFS= read -r printer; do
         [[ -z "$printer" ]] && continue
+        local dev_uri
+        dev_uri=$(lpstat -v "$printer" 2>/dev/null | awk '{print $NF}')
+        if [[ "$dev_uri" == *"/dev/null"* ]]; then
+            log "Removing ghost queue '$printer' (uri=$dev_uri)"
+            lpadmin -x "$printer" 2>/dev/null || true
+            continue
+        fi
         cupsenable  "$printer" 2>/dev/null || true
         cupsaccept  "$printer" 2>/dev/null || true
         lpadmin -p  "$printer" -o printer-is-shared=true 2>/dev/null || true
-        log "Printer '$printer': enabled, accepting jobs, shared"
+        lpadmin -p  "$printer" -o printer-error-policy=retry-job 2>/dev/null || true
+        log "Printer '$printer': enabled, accepting jobs, shared (uri=$dev_uri)"
     done < <(lpstat -p 2>/dev/null | awk '{print $2}')
 }
 
