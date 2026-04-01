@@ -629,12 +629,20 @@ detect_printer() {
             # Extract printer name from URI
             PRINTER_NAME=$(echo "$PRINTER_URI" | sed 's|usb://||' | tr '/' '_' | tr ' ' '_')
 
-            # Add printer to CUPS
+            # Add printer to CUPS using Generic PWG Raster driver.
+            # Do NOT use -m everywhere (requires IPP network connection, fails
+            # with USB URIs on newer CUPS) or brlaser (doesn't recover from
+            # printer sleep — queue goes to permanent stopped state).
             if ! lpstat -p "$PRINTER_NAME" > /dev/null 2>&1; then
                 log_info "Adding printer '$PRINTER_NAME' to CUPS..."
-                lpadmin -p "$PRINTER_NAME" -E -v "$PRINTER_URI" -m everywhere
+                if lpadmin -p "$PRINTER_NAME" -E -v "$PRINTER_URI" -m "drv:///cupsfilters.drv/pwgrast.ppd" 2>/dev/null; then
+                    log_info "Printer added with PWG Raster driver"
+                else
+                    log_warn "PWG Raster failed, adding raw queue..."
+                    lpadmin -p "$PRINTER_NAME" -E -v "$PRINTER_URI" 2>/dev/null || true
+                fi
                 lpadmin -d "$PRINTER_NAME"  # Set as default
-                log_info "Printer added and set as default"
+                log_info "Printer set as default"
             else
                 log_info "Printer '$PRINTER_NAME' already configured"
             fi
@@ -660,7 +668,7 @@ detect_printer() {
     log_warn "No USB printer detected after $max_attempts attempts."
     log_warn "Connect your printer and run:"
     log_warn "  sudo lpinfo -v  # to list available printers"
-    log_warn "  sudo lpadmin -p PrinterName -E -v usb://... -m everywhere"
+    log_warn "  sudo lpadmin -p PrinterName -E -v usb://... -m drv:///cupsfilters.drv/pwgrast.ppd"
     log_warn "  sudo cupsenable PrinterName && sudo cupsaccept PrinterName"
 }
 

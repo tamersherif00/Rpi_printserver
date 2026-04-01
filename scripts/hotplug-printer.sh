@@ -7,7 +7,10 @@
 # On connect  (add):
 #   1. Wait for CUPS scheduler to accept connections
 #   2. Find the USB printer URI via lpinfo -v
-#   3. Add a CUPS queue with driver "everywhere" (IPP Everywhere / driverless)
+#   3. Add a CUPS queue with the generic PWG Raster driver
+#      (NOT -m everywhere, which requires an IPP network connection and
+#      fails with USB URIs on newer CUPS; NOT brlaser, which doesn't
+#      handle printer sleep/reconnect properly)
 #   4. Enable the queue, start accepting jobs, mark as shared
 #   5. Trigger configure-avahi.sh so Avahi advertises the printer via mDNS
 #      → Windows 10/11, iOS, Android will auto-discover it
@@ -64,14 +67,22 @@ add_printer() {
 
     if ! lpstat -p "$name" 2>/dev/null | grep -q "$name"; then
         log "Adding CUPS queue '$name' for $uri ..."
-        if lpadmin -p "$name" -E -v "$uri" -m everywhere 2>/dev/null; then
+
+        # Use Generic PWG Raster driver (works with USB, handles sleep/reconnect).
+        # Do NOT use -m everywhere (requires IPP network connection, fails with USB)
+        # or brlaser (doesn't recover from printer sleep).
+        if lpadmin -p "$name" -E -v "$uri" -m "drv:///cupsfilters.drv/pwgrast.ppd" 2>/dev/null; then
             lpadmin -d "$name" 2>/dev/null || true   # set as default
-            log "Queue '$name' added (driverless/IPP Everywhere)"
+            log "Queue '$name' added (PWG Raster / generic driverless)"
         else
-            # Driver-less setup failed — printer may need a specific PPD.
-            # Leave setup to the user via the CUPS web UI; still continue to
-            # enable + share any queue that already exists under a different name.
-            log "lpadmin -m everywhere failed — add the printer via the CUPS web UI"
+            log "PWG Raster driver failed, trying raw queue..."
+            # Last resort: raw queue (no filtering, printer must accept raw data)
+            if lpadmin -p "$name" -E -v "$uri" 2>/dev/null; then
+                lpadmin -d "$name" 2>/dev/null || true
+                log "Queue '$name' added (raw, no driver)"
+            else
+                log "lpadmin failed — add the printer via the CUPS web UI"
+            fi
         fi
     else
         log "Queue '$name' already exists — skipping lpadmin"
