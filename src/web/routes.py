@@ -3,6 +3,7 @@
 import logging
 import socket
 import subprocess
+import threading
 import time
 from datetime import datetime
 from typing import Any
@@ -68,25 +69,31 @@ def _cached_call(key: str, fn, ttl_seconds: float):
     return result
 
 
-def get_cups_client(app: Flask) -> CupsClient:
-    """Get a self-healing singleton CUPS client.
+_thread_local = threading.local()
 
-    Creates the client once and reuses it. The client's ensure_connected()
-    handles reconnection with retry on each use.
+
+def get_cups_client(app: Flask) -> CupsClient:
+    """Get a per-thread CUPS client.
+
+    pycups Connection objects are not thread-safe. Using a single shared
+    instance across gunicorn threads causes each thread to see the other's
+    connection as dead (getServer() races), triggering constant reconnects.
+    threading.local() gives each thread its own connection that is only
+    ever touched by that thread.
 
     Args:
         app: Flask application.
 
     Returns:
-        Connected CupsClient instance.
+        Connected CupsClient instance for the current thread.
     """
-    if not hasattr(app, "_cups_client") or app._cups_client is None:
-        app._cups_client = CupsClient(
+    if not hasattr(_thread_local, "cups_client") or _thread_local.cups_client is None:
+        _thread_local.cups_client = CupsClient(
             host=app.config.get("CUPS_HOST", "localhost"),
             port=app.config.get("CUPS_PORT", 631),
         )
-    app._cups_client.ensure_connected()
-    return app._cups_client
+    _thread_local.cups_client.ensure_connected()
+    return _thread_local.cups_client
 
 
 def _get_ip_address() -> str:

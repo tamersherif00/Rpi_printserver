@@ -241,13 +241,29 @@ class CupsClient:
         """
         self.ensure_connected()
         try:
+            # pycups getJobs() only returns a small default attribute set
+            # (no timestamps).  Explicitly request the fields the UI needs.
+            if not requested_attributes:
+                requested_attributes = [
+                    "job-id",
+                    "job-name",
+                    "job-originating-user-name",
+                    "job-state",
+                    "job-state-message",
+                    "job-k-octets",
+                    "job-media-sheets",
+                    "job-media-sheets-completed",
+                    "job-printer-uri",
+                    "time-at-creation",
+                    "time-at-completed",
+                    "time-at-processing",
+                ]
+
             kwargs = {
                 "which_jobs": which_jobs,
                 "my_jobs": my_jobs,
+                "requested_attributes": requested_attributes,
             }
-
-            if requested_attributes:
-                kwargs["requested_attributes"] = requested_attributes
 
             jobs = self.connection.getJobs(**kwargs)
 

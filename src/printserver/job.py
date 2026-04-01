@@ -38,21 +38,25 @@ class PrintJob:
         created_at = None
         completed_at = None
 
-        # Try different timestamp attribute names
+        # Try different timestamp attribute names.
+        # CUPS returns 0 (Unix epoch) when a timestamp isn't set yet
+        # (e.g. time-at-completed for a pending job), so treat 0 as missing.
         for ts_attr in ["time-at-creation", "time_at_creation"]:
-            if ts_attr in data:
+            ts_val = data.get(ts_attr)
+            if ts_val:
                 try:
-                    created_at = datetime.fromtimestamp(data[ts_attr])
+                    created_at = datetime.fromtimestamp(ts_val)
                     break
-                except (ValueError, TypeError):
+                except (ValueError, TypeError, OSError):
                     pass
 
         for ts_attr in ["time-at-completed", "time_at_completed"]:
-            if ts_attr in data:
+            ts_val = data.get(ts_attr)
+            if ts_val:
                 try:
-                    completed_at = datetime.fromtimestamp(data[ts_attr])
+                    completed_at = datetime.fromtimestamp(ts_val)
                     break
-                except (ValueError, TypeError):
+                except (ValueError, TypeError, OSError):
                     pass
 
         # Extract printer name from URI - try multiple attribute names
