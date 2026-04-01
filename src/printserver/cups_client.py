@@ -19,9 +19,12 @@ JOB_STATE_CANCELED = 7
 JOB_STATE_ABORTED = 8
 JOB_STATE_COMPLETED = 9
 
-# Connection staleness threshold (seconds) — keep short so we detect
-# CUPS restarts quickly without serving stale connections
-MAX_CONNECTION_AGE = 120
+# Connection staleness threshold — how long before we proactively refresh
+# a connection. pycups connections to localhost are cheap to hold open;
+# 3600s means we only reconnect if the thread has been idle for an hour,
+# rather than every 2 minutes (which flooded logs with "Connected" spam).
+# Dead connections are still caught immediately by the getServer() check.
+MAX_CONNECTION_AGE = 3600
 
 
 class CupsClientError(Exception):
@@ -56,7 +59,7 @@ class CupsClient:
 
             self._connection = cups.Connection(host=self.host)
             self._connected_at = time.monotonic()
-            logger.info(f"Connected to CUPS at {self.host}:{self.port}")
+            logger.debug(f"Connected to CUPS at {self.host}:{self.port}")
         except ImportError:
             logger.warning("pycups not available, using mock connection")
             self._connection = None
@@ -88,12 +91,13 @@ class CupsClient:
                 self._connection = cups.Connection(host=self.host)
                 self._connected_at = time.monotonic()
                 if attempt > 0:
+                    # Reconnected after a failure — worth logging at INFO
                     logger.info(
-                        f"Connected to CUPS at {self.host}:{self.port} "
+                        f"Reconnected to CUPS at {self.host}:{self.port} "
                         f"(after {attempt + 1} attempts)"
                     )
                 else:
-                    logger.info(f"Connected to CUPS at {self.host}:{self.port}")
+                    logger.debug(f"Connected to CUPS at {self.host}:{self.port}")
                 return
             except ImportError:
                 logger.warning("pycups not available, using mock connection")
@@ -134,7 +138,7 @@ class CupsClient:
                 self._connection = None
 
         if self._connection is not None and self.is_stale:
-            logger.info("CUPS connection is stale, reconnecting")
+            logger.debug("CUPS connection is stale, reconnecting")
             self._connection = None
 
         self.connect_with_retry()
