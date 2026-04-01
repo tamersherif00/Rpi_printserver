@@ -629,17 +629,21 @@ detect_printer() {
             # Extract printer name from URI
             PRINTER_NAME=$(echo "$PRINTER_URI" | sed 's|usb://||' | tr '/' '_' | tr ' ' '_')
 
-            # Add printer to CUPS using Generic PWG Raster driver.
+            # Add printer to CUPS.
+            # Driver priority: model-specific brlaser > generic PWG Raster > raw.
             # Do NOT use -m everywhere (requires IPP network connection, fails
-            # with USB URIs on newer CUPS) or brlaser (doesn't recover from
-            # printer sleep — queue goes to permanent stopped state).
+            # with USB URIs on newer CUPS).
+            # Sleep recovery is handled by retry-job, wake-printer.sh, and watchdog.
             if ! lpstat -p "$PRINTER_NAME" > /dev/null 2>&1; then
                 log_info "Adding printer '$PRINTER_NAME' to CUPS..."
-                if lpadmin -p "$PRINTER_NAME" -E -v "$PRINTER_URI" -m "drv:///cupsfilters.drv/pwgrast.ppd" 2>/dev/null; then
+                local brlaser_ppd
+                brlaser_ppd=$(lpinfo -m 2>/dev/null | grep -i "brlaser" | grep -i "$(echo "$PRINTER_NAME" | tr '_' ' ' | awk '{print $NF}')" | head -1 | awk '{print $1}')
+                if [[ -n "$brlaser_ppd" ]] && lpadmin -p "$PRINTER_NAME" -E -v "$PRINTER_URI" -m "$brlaser_ppd" 2>/dev/null; then
+                    log_info "Printer added with brlaser driver: $brlaser_ppd"
+                elif lpadmin -p "$PRINTER_NAME" -E -v "$PRINTER_URI" -m "drv:///cupsfilters.drv/pwgrast.ppd" 2>/dev/null; then
                     log_info "Printer added with PWG Raster driver"
                 else
-                    log_warn "PWG Raster failed, adding raw queue..."
-                    lpadmin -p "$PRINTER_NAME" -E -v "$PRINTER_URI" 2>/dev/null || true
+                    log_warn "All drivers failed — add printer via CUPS web UI"
                 fi
                 lpadmin -d "$PRINTER_NAME"  # Set as default
                 log_info "Printer set as default"
@@ -668,7 +672,7 @@ detect_printer() {
     log_warn "No USB printer detected after $max_attempts attempts."
     log_warn "Connect your printer and run:"
     log_warn "  sudo lpinfo -v  # to list available printers"
-    log_warn "  sudo lpadmin -p PrinterName -E -v usb://... -m drv:///cupsfilters.drv/pwgrast.ppd"
+    log_warn "  sudo lpadmin -p PrinterName -E -v usb://... -m drv:///brlaser.drv/MODEL.ppd"
     log_warn "  sudo cupsenable PrinterName && sudo cupsaccept PrinterName"
 }
 

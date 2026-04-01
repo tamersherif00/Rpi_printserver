@@ -7,10 +7,9 @@
 # On connect  (add):
 #   1. Wait for CUPS scheduler to accept connections
 #   2. Find the USB printer URI via lpinfo -v
-#   3. Add a CUPS queue with the generic PWG Raster driver
-#      (NOT -m everywhere, which requires an IPP network connection and
-#      fails with USB URIs on newer CUPS; NOT brlaser, which doesn't
-#      handle printer sleep/reconnect properly)
+#   3. Add a CUPS queue (tries model-specific brlaser first for Brother
+#      printers, falls back to generic PWG Raster; NEVER -m everywhere
+#      which requires an IPP network connection and fails with USB URIs)
 #   4. Enable the queue, start accepting jobs, mark as shared
 #   5. Trigger configure-avahi.sh so Avahi advertises the printer via mDNS
 #      → Windows 10/11, iOS, Android will auto-discover it
@@ -68,21 +67,33 @@ add_printer() {
     if ! lpstat -p "$name" 2>/dev/null | grep -q "$name"; then
         log "Adding CUPS queue '$name' for $uri ..."
 
-        # Use Generic PWG Raster driver (works with USB, handles sleep/reconnect).
-        # Do NOT use -m everywhere (requires IPP network connection, fails with USB)
-        # or brlaser (doesn't recover from printer sleep).
-        if lpadmin -p "$name" -E -v "$uri" -m "drv:///cupsfilters.drv/pwgrast.ppd" 2>/dev/null; then
-            lpadmin -d "$name" 2>/dev/null || true   # set as default
-            log "Queue '$name' added (PWG Raster / generic driverless)"
+        # Driver selection for USB printers:
+        # 1. Try the printer-specific brlaser PPD (best print quality for Brother)
+        # 2. Fall back to generic PWG Raster (works with most USB printers)
+        # 3. Last resort: raw queue
+        #
+        # Do NOT use -m everywhere — it requires an IPP network connection
+        # and fails with USB URIs on newer CUPS.
+        #
+        # Sleep recovery is handled separately by retry-job error policy,
+        # wake-printer.sh (USB reset), and the printer-watchdog timer.
+        local driver=""
+        # Check if a brlaser driver exists for this specific printer model
+        local brlaser_ppd
+        brlaser_ppd=$(lpinfo -m 2>/dev/null | grep -i "brlaser" | grep -i "$(echo "$name" | tr '_' ' ' | awk '{print $NF}')" | head -1 | awk '{print $1}')
+        if [[ -n "$brlaser_ppd" ]]; then
+            driver="$brlaser_ppd"
+            log "Found model-specific brlaser driver: $driver"
+        fi
+
+        if [[ -n "$driver" ]] && lpadmin -p "$name" -E -v "$uri" -m "$driver" 2>/dev/null; then
+            lpadmin -d "$name" 2>/dev/null || true
+            log "Queue '$name' added (driver: $driver)"
+        elif lpadmin -p "$name" -E -v "$uri" -m "drv:///cupsfilters.drv/pwgrast.ppd" 2>/dev/null; then
+            lpadmin -d "$name" 2>/dev/null || true
+            log "Queue '$name' added (PWG Raster / generic)"
         else
-            log "PWG Raster driver failed, trying raw queue..."
-            # Last resort: raw queue (no filtering, printer must accept raw data)
-            if lpadmin -p "$name" -E -v "$uri" 2>/dev/null; then
-                lpadmin -d "$name" 2>/dev/null || true
-                log "Queue '$name' added (raw, no driver)"
-            else
-                log "lpadmin failed — add the printer via the CUPS web UI"
-            fi
+            log "lpadmin failed — add the printer via the CUPS web UI"
         fi
     else
         log "Queue '$name' already exists — skipping lpadmin"
