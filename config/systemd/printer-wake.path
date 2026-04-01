@@ -1,0 +1,10 @@
+[Unit]
+Description=Watch CUPS spool for new print jobs and wake USB printer
+
+[Path]
+# CUPS writes job control files (c#####) to this directory for each new job.
+# PathChanged fires when any file in the directory is written or created.
+PathChanged=/var/spool/cups
+
+[Install]
+WantedBy=multi-user.target

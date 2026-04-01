@@ -338,6 +338,20 @@ install_systemd_service() {
     cp "$SCRIPT_DIR/printer-watchdog.sh" "$INSTALL_DIR/scripts/"
     chmod +x "$INSTALL_DIR/scripts/printer-watchdog.sh"
 
+    # Install printer wake script — sends USB reset to wake printer from
+    # firmware sleep mode (separate from kernel USB autosuspend)
+    cp "$SCRIPT_DIR/wake-printer.sh" "$INSTALL_DIR/scripts/"
+    chmod +x "$INSTALL_DIR/scripts/wake-printer.sh"
+
+    # Install systemd path unit that watches /var/spool/cups for new jobs
+    # and immediately wakes the USB printer. This prevents the "first print
+    # after idle fails" problem where the printer's firmware is asleep and
+    # ignores USB data from CUPS.
+    cp "$PROJECT_DIR/config/systemd/printer-wake.path" /etc/systemd/system/
+    cp "$PROJECT_DIR/config/systemd/printer-wake.service" /etc/systemd/system/
+    systemctl enable --now printer-wake.path 2>/dev/null || true
+    log_info "Printer wake path unit installed"
+
     systemctl daemon-reload
     systemctl enable printserver-web.service
     systemctl enable cups.service

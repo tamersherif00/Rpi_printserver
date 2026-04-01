@@ -48,9 +48,13 @@ WebInterface Yes
 # until someone manually re-enables it.
 ErrorPolicy retry-job
 
-# Preserve jobs across restarts (conservative for 1GB Pi)
+# Preserve jobs across restarts and retry cycles.
+# Documents are spooled on the Pi (not passed through inline), so they
+# survive printer sleep, USB reconnects, and CUPS restarts. Increased
+# from 1h to 4h to give ample time for wake + retry when the printer
+# is in deep firmware sleep.
 PreserveJobHistory Yes
-PreserveJobFiles 1h
+PreserveJobFiles 4h
 MaxJobs 100
 
 # Limit access to the server

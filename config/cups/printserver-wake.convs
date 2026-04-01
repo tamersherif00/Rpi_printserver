@@ -1,0 +1,8 @@
+# CUPS filter registration for printer wake pre-filter
+# Installed to /usr/share/cups/mime/printserver-wake.convs
+#
+# This registers a cost-0 filter that runs before all other filters.
+# It wakes the USB printer from firmware sleep, then passes data through.
+#
+# Format: source/type destination/type cost filter
+application/vnd.cups-raw application/vnd.cups-raw 0 cups-pre-filter-wake.sh

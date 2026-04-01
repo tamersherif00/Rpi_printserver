@@ -179,14 +179,15 @@ configure_job_preservation() {
 
     # Set job retention settings (conservative for 1GB Pi)
     if [[ -f "$CUPS_CONFIG" ]]; then
-        # Preserve jobs for 12 hours after completion
+        # Preserve jobs across restarts and retry cycles (4h gives ample
+        # time for printer wake + retry when printer is in firmware sleep)
         if ! grep -q "^PreserveJobHistory" "$CUPS_CONFIG"; then
             echo "PreserveJobHistory Yes" >> "$CUPS_CONFIG"
         fi
         if grep -q "^PreserveJobFiles" "$CUPS_CONFIG"; then
-            sed -i 's/^PreserveJobFiles.*/PreserveJobFiles 12h/' "$CUPS_CONFIG"
+            sed -i 's/^PreserveJobFiles.*/PreserveJobFiles 4h/' "$CUPS_CONFIG"
         else
-            echo "PreserveJobFiles 12h" >> "$CUPS_CONFIG"
+            echo "PreserveJobFiles 4h" >> "$CUPS_CONFIG"
         fi
         if grep -q "^MaxJobs" "$CUPS_CONFIG"; then
             sed -i 's/^MaxJobs.*/MaxJobs 100/' "$CUPS_CONFIG"

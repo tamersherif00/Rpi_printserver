@@ -1,17 +1,49 @@
 #!/bin/bash
 # Printer Watchdog
-# Periodically checks for printers stuck in "stopped" or error state
-# and re-enables them. Designed to run as a systemd timer.
+# Periodically checks for printers stuck in "stopped" or error state,
+# re-enables them, and proactively wakes the USB printer from firmware
+# sleep so the next print job succeeds immediately.
+#
+# Designed to run as a systemd timer (every 30 seconds).
 #
 # Why: CUPS can mark a printer as stopped after transient USB errors
 # (printer sleep, cable hiccup, power glitch). ErrorPolicy=retry-job
 # handles in-flight jobs, but sometimes the queue itself gets paused.
-# This watchdog catches those cases.
+# Additionally, the printer's own firmware has a sleep mode that is
+# separate from Linux USB autosuspend — when asleep, the printer
+# ignores USB bulk transfers. This watchdog proactively wakes it.
 
 LOGPREFIX="[printer-watchdog]"
+WAKE_SCRIPT="/opt/printserver/scripts/wake-printer.sh"
 
 log_info() {
     logger -t printer-watchdog "$1"
+}
+
+# Proactively wake USB printer if there are pending jobs or if the
+# printer appears to be in an error state. This prevents the scenario
+# where a print job arrives, CUPS tries to send it, the printer is
+# asleep, the backend times out, and Windows gets an error.
+wake_sleeping_printer() {
+    [[ -x "$WAKE_SCRIPT" ]] || return 0
+
+    local needs_wake=0
+
+    # Wake if there are any pending/held jobs waiting to print
+    if lpstat -o 2>/dev/null | grep -q .; then
+        log_info "Pending jobs found — waking printer"
+        needs_wake=1
+    fi
+
+    # Wake if any printer is in stopped/error state
+    if lpstat -p 2>/dev/null | grep -qi "disabled\|stopped"; then
+        log_info "Stopped printer detected — waking printer"
+        needs_wake=1
+    fi
+
+    if [[ $needs_wake -eq 1 ]]; then
+        "$WAKE_SCRIPT" 2>/dev/null || true
+    fi
 }
 
 # Get all stopped/disabled printers
@@ -75,5 +107,6 @@ cleanup_old_jobs() {
     fi
 }
 
+wake_sleeping_printer
 recover_printers
 cleanup_old_jobs
