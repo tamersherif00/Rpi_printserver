@@ -817,16 +817,27 @@ main() {
     # On update, existing queues are preserved; detect_printer only adds
     # if the queue doesn't already exist.
     detect_printer
-    enable_all_printers
 
     # Enable sharing (may have failed during configure_cups if CUPS wasn't
-    # ready yet; now CUPS is running so retry)
+    # ready yet; now CUPS is running so retry).
+    # This MUST run BEFORE enable_all_printers because cupsctl can trigger
+    # a CUPS reload that resets printer acceptance state.
     cupsctl --share-printers --remote-any --no-remote-admin 2>/dev/null || true
 
     # Configure Avahi AFTER printers are detected so service files
     # are generated for any printer already connected at install time.
-    # On future hotplug events, udev triggers this script automatically.
     configure_avahi
+
+    # Enable all printers as the LAST step — after cupsctl and avahi config,
+    # which can both trigger CUPS reloads that reset acceptance state.
+    enable_all_printers
+
+    # Final safety: explicitly accept jobs on all printers one more time.
+    # Belt-and-suspenders because some CUPS versions reset acceptance on reload.
+    sleep 2
+    lpstat -p 2>/dev/null | awk '{print $2}' | while read -r p; do
+        [[ -n "$p" ]] && cupsaccept "$p" 2>/dev/null && cupsenable "$p" 2>/dev/null
+    done || true
 
     print_summary
 }

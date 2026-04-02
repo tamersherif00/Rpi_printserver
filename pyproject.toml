@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rpi-printserver"
-version = "1.2.1"
+version = "1.2.2"
 description = "Raspberry Pi WiFi Print Server with web interface"
 readme = "README.md"
 license = {text = "MIT"}
