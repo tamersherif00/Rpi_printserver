@@ -641,7 +641,12 @@ detect_printer() {
             log_info "Found USB printer: $PRINTER_URI (attempt $attempt)"
 
             # Extract printer name from URI
-            PRINTER_NAME=$(echo "$PRINTER_URI" | sed 's|usb://||' | tr '/' '_' | tr ' ' '_')
+            # e.g. usb://Brother/HL-L2340D%20series?serial=... → Brother_HL-L2340D_series
+            PRINTER_NAME=$(echo "$PRINTER_URI" \
+                | sed 's|usb://||' \
+                | sed 's|%[0-9A-Fa-f]\{2\}| |g' \
+                | tr -s '/ ?&=' '_' \
+                | sed 's/^_//; s/_$//')
 
             # Add printer to CUPS.
             # Driver priority: model-specific brlaser > generic PWG Raster > raw.
@@ -791,14 +796,22 @@ main() {
     configure_log_limits
     configure_system_tuning
 
-    # If updating, restart services; otherwise start them fresh
+    # Start or restart services
     if [[ "$IS_UPDATE" == "true" ]]; then
         restart_services
     else
         start_services
-        detect_printer
-        enable_all_printers
     fi
+
+    # Always detect and configure printers (both fresh install and update).
+    # On update, existing queues are preserved; detect_printer only adds
+    # if the queue doesn't already exist.
+    detect_printer
+    enable_all_printers
+
+    # Enable sharing (may have failed during configure_cups if CUPS wasn't
+    # ready yet; now CUPS is running so retry)
+    cupsctl --share-printers --remote-any --no-remote-admin 2>/dev/null || true
 
     # Configure Avahi AFTER printers are detected so service files
     # are generated for any printer already connected at install time.
