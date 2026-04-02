@@ -400,6 +400,15 @@ install_systemd_service() {
     rm -f /var/cache/cups/subscriptions.conf* 2>/dev/null || true
     log_info "cups-browsed disabled (not needed for local USB printer)"
 
+    # Disable CUPS dbus notifier — it spawns dozens of processes on a headless
+    # Pi (no desktop to receive notifications) and the accumulated stale
+    # subscriptions crash the CUPS 2.4.x scheduler.
+    local dbus_notifier="/usr/lib/cups/notifier/dbus"
+    if [[ -x "$dbus_notifier" ]]; then
+        chmod 000 "$dbus_notifier"
+        log_info "CUPS dbus notifier disabled (not needed on headless Pi)"
+    fi
+
     log_info "Systemd services configured"
 }
 

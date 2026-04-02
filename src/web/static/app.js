@@ -198,7 +198,7 @@ function updateJobsTable(jobs) {
     }
 
     tbody.innerHTML = jobs.map(job => {
-        // Build the "From" cell: always show IP first, username as secondary
+        // Build the "From" cell: IP first if remote, username if available
         let fromCell;
         const hasUser = job.user && !['anonymous', 'unknown', ''].includes(job.user);
         const hasHost = job.origin_host && job.origin_host.length > 0;
@@ -206,11 +206,11 @@ function updateJobsTable(jobs) {
         if (hasHost && !isLocal) {
             fromCell = `<i class="bi bi-pc-display-horizontal"></i> ${escapeHtml(job.origin_host)}`;
             if (hasUser) fromCell += `<br><small class="text-muted">${escapeHtml(job.user)}</small>`;
-        } else if (isLocal || (!hasHost && !hasUser)) {
-            fromCell = '<i class="bi bi-house-door"></i> This server';
-            if (hasUser) fromCell += `<br><small class="text-muted">${escapeHtml(job.user)}</small>`;
+        } else if (hasUser) {
+            fromCell = `<i class="bi bi-person"></i> ${escapeHtml(job.user)}`;
+            if (isLocal) fromCell += `<br><small class="text-muted">This server</small>`;
         } else {
-            fromCell = escapeHtml(job.user);
+            fromCell = '<i class="bi bi-house-door"></i> This server';
         }
 
         // Status cell with state reasons (detailed) or state message (fallback)

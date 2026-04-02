@@ -77,13 +77,13 @@
                                     {% if has_user %}
                                         <br><small class="text-muted">{{ job.user }}</small>
                                     {% endif %}
+                                {% elif has_user %}
+                                    <i class="bi bi-person"></i> {{ job.user }}
+                                    {% if job.origin_host and job.origin_host in ('localhost', '127.0.0.1', '::1') %}
+                                        <br><small class="text-muted">This server</small>
+                                    {% endif %}
                                 {% elif job.origin_host in ('localhost', '127.0.0.1', '::1') %}
                                     <i class="bi bi-house-door"></i> This server
-                                    {% if has_user %}
-                                        <br><small class="text-muted">{{ job.user }}</small>
-                                    {% endif %}
-                                {% elif has_user %}
-                                    {{ job.user }}
                                 {% else %}
                                     <i class="bi bi-house-door"></i> This server
                                 {% endif %}

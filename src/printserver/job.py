@@ -176,6 +176,18 @@ class PrintJob:
         status_detail = ""
         msg = self.state_message.strip() if self.state_message else ""
         reasons = self.state_reasons.strip() if self.state_reasons else ""
+
+        # Windows IPP clients send Cancel-Job after a job completes (cleanup).
+        # CUPS records this as "canceled" with reason "job-canceled-by-user",
+        # even though the job printed fine.  Detect this and show "completed".
+        effective_state = self.state
+        if (self.state == "canceled"
+                and self.completed_at is not None
+                and reasons in ("job-canceled-by-user", "")):
+            effective_state = "completed"
+            status_detail = ""
+            reasons = ""
+
         if msg and reasons and msg.lower() != reasons.lower():
             status_detail = f"{msg} ({self._humanize_reasons(reasons)})"
         elif msg:
@@ -185,7 +197,7 @@ class PrintJob:
 
         # For canceled/aborted jobs with no explanation, provide a default
         # so the user isn't left wondering why their job disappeared.
-        if not status_detail and self.state in ("canceled", "aborted"):
+        if not status_detail and effective_state in ("canceled", "aborted"):
             status_detail = "Canceled by system (printer may have been unresponsive)"
 
         return {
@@ -193,7 +205,7 @@ class PrintJob:
             "title": self.title,
             "user": self.user,
             "origin_host": self.origin_host,
-            "state": self.state,
+            "state": effective_state,
             "state_message": status_detail,
             "state_reasons": self.state_reasons,
             "size": self.size,
