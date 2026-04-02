@@ -22,6 +22,8 @@ class PrintJob:
     created_at: Optional[datetime]
     completed_at: Optional[datetime]
     printer_name: str
+    origin_host: str = ""
+    processing_at: Optional[datetime] = None
 
     @classmethod
     def from_cups_data(cls, job_id: int, data: dict[str, Any]) -> "PrintJob":
@@ -37,6 +39,7 @@ class PrintJob:
         # Parse timestamps - try multiple attribute names
         created_at = None
         completed_at = None
+        processing_at = None
 
         # Try different timestamp attribute names.
         # CUPS returns 0 (Unix epoch) when a timestamp isn't set yet
@@ -55,6 +58,15 @@ class PrintJob:
             if ts_val:
                 try:
                     completed_at = datetime.fromtimestamp(ts_val)
+                    break
+                except (ValueError, TypeError, OSError):
+                    pass
+
+        for ts_attr in ["time-at-processing", "time_at_processing"]:
+            ts_val = data.get(ts_attr)
+            if ts_val:
+                try:
+                    processing_at = datetime.fromtimestamp(ts_val)
                     break
                 except (ValueError, TypeError, OSError):
                     pass
@@ -78,6 +90,18 @@ class PrintJob:
         )
         if isinstance(user, bytes):
             user = user.decode("utf-8", errors="replace")
+
+        # Get originating host (client IP address).
+        # Since DefaultAuthType=None, the username is often "anonymous" or
+        # a generic Windows username.  The host IP is the reliable way to
+        # identify which device sent the job.
+        origin_host = (
+            data.get("job-originating-host-name")
+            or data.get("job_originating_host_name")
+            or ""
+        )
+        if isinstance(origin_host, bytes):
+            origin_host = origin_host.decode("utf-8", errors="replace")
 
         # Get state message
         state_message = (
@@ -106,6 +130,7 @@ class PrintJob:
             id=job_id,
             title=title,
             user=user,
+            origin_host=origin_host,
             state=state,
             state_message=state_message,
             size=size,
@@ -113,6 +138,7 @@ class PrintJob:
             pages_completed=pages_completed,
             created_at=created_at,
             completed_at=completed_at,
+            processing_at=processing_at,
             printer_name=printer_name,
         )
 
@@ -126,15 +152,60 @@ class PrintJob:
             "id": self.id,
             "title": self.title,
             "user": self.user,
+            "origin_host": self.origin_host,
             "state": self.state,
             "state_message": self.state_message,
             "size": self.size,
+            "size_display": self._format_size(),
             "pages": self.pages,
             "pages_completed": self.pages_completed,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "processing_at": self.processing_at.isoformat() if self.processing_at else None,
             "printer_name": self.printer_name,
+            "duration": self._format_duration(),
         }
+
+    def _format_size(self) -> str:
+        """Format file size for display.
+
+        Returns:
+            Human-readable size string.
+        """
+        if self.size <= 0:
+            return "-"
+        if self.size < 1024:
+            return f"{self.size} B"
+        if self.size < 1024 * 1024:
+            return f"{self.size / 1024:.1f} KB"
+        return f"{self.size / (1024 * 1024):.1f} MB"
+
+    def _format_duration(self) -> Optional[str]:
+        """Calculate how long the job took (submitted to completed).
+
+        Returns:
+            Human-readable duration string, or None if not applicable.
+        """
+        if not self.created_at:
+            return None
+        end = self.completed_at or (
+            datetime.now() if self.is_active else None
+        )
+        if not end:
+            return None
+        delta = end - self.created_at
+        secs = int(delta.total_seconds())
+        if secs < 0:
+            return None
+        if secs < 60:
+            return f"{secs}s"
+        mins = secs // 60
+        secs = secs % 60
+        if mins < 60:
+            return f"{mins}m {secs}s"
+        hours = mins // 60
+        mins = mins % 60
+        return f"{hours}h {mins}m"
 
     @property
     def is_pending(self) -> bool:

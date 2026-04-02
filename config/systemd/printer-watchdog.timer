@@ -1,10 +1,10 @@
 [Unit]
-Description=Run printer health watchdog every 30 seconds
+Description=Run printer health watchdog every 10 seconds
 
 [Timer]
-OnBootSec=30
-OnUnitActiveSec=30
-AccuracySec=5
+OnBootSec=15
+OnUnitActiveSec=10
+AccuracySec=2
 
 [Install]
 WantedBy=timers.target

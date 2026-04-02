@@ -54,10 +54,13 @@
                     <tr>
                         <th>ID</th>
                         <th>Document</th>
-                        <th>User</th>
+                        <th>From</th>
+                        <th>Printer</th>
                         <th>Status</th>
                         <th>Pages</th>
+                        <th>Size</th>
                         <th>Submitted</th>
+                        <th>Duration</th>
                         <th>Actions</th>
                     </tr>
                 </thead>
@@ -66,8 +69,22 @@
                         {% for job in jobs %}
                         <tr data-job-id="{{ job.id }}" class="job-row">
                             <td>{{ job.id }}</td>
-                            <td>{{ job.title }}</td>
-                            <td>{{ job.user }}</td>
+                            <td title="{{ job.title }}">{{ job.title | truncate(40) }}</td>
+                            <td>
+                                <span title="{{ job.origin_host }}">
+                                    {% if job.user and job.user != 'anonymous' and job.user != 'unknown' %}
+                                        {{ job.user }}
+                                    {% elif job.origin_host %}
+                                        <i class="bi bi-pc-display-horizontal"></i> {{ job.origin_host }}
+                                    {% else %}
+                                        <span class="text-muted">unknown</span>
+                                    {% endif %}
+                                </span>
+                                {% if job.user and job.user != 'anonymous' and job.user != 'unknown' and job.origin_host %}
+                                    <br><small class="text-muted">{{ job.origin_host }}</small>
+                                {% endif %}
+                            </td>
+                            <td>{{ job.printer_name or '-' }}</td>
                             <td>
                                 <span class="badge
                                     {% if job.state == 'pending' or job.state == 'pending-held' %}bg-warning text-dark
@@ -77,6 +94,9 @@
                                     {% else %}bg-danger{% endif %}">
                                     {{ job.state | replace('-', ' ') | title }}
                                 </span>
+                                {% if job.state_message %}
+                                    <br><small class="text-muted" title="{{ job.state_message }}">{{ job.state_message | truncate(30) }}</small>
+                                {% endif %}
                             </td>
                             <td>
                                 {% if job.pages %}
@@ -85,6 +105,7 @@
                                     -
                                 {% endif %}
                             </td>
+                            <td>{{ job._format_size() }}</td>
                             <td>
                                 {% if job.created_at %}
                                     {{ job.created_at.strftime('%Y-%m-%d %H:%M') }}
@@ -92,6 +113,7 @@
                                     -
                                 {% endif %}
                             </td>
+                            <td>{{ job._format_duration() or '-' }}</td>
                             <td>
                                 {% if job.can_cancel %}
                                 <button class="btn btn-sm btn-danger" onclick="cancelJob({{ job.id }})">
@@ -105,7 +127,7 @@
                         {% endfor %}
                     {% else %}
                         <tr>
-                            <td colspan="7" class="text-center text-muted py-4">
+                            <td colspan="10" class="text-center text-muted py-4">
                                 <i class="bi bi-inbox fs-1"></i>
                                 <p class="mt-2">No print jobs in queue</p>
                             </td>

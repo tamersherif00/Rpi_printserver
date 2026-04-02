@@ -1,5 +1,5 @@
 #!/bin/bash
-# wake-printer.sh — Wake a USB printer from firmware sleep mode
+# wake-printer.sh â€” Wake a USB printer from firmware sleep mode
 #
 # The kernel's USB autosuspend (disabled by our udev rules) only controls the
 # Linux-side power state.  The printer's own firmware has a separate sleep/
@@ -10,15 +10,14 @@
 # This script:
 #   1. Finds the USB printer's device node (/dev/bus/usb/BBB/DDD)
 #   2. Sends a USBDEVFS_RESET ioctl to wake the printer firmware
-#   3. Optionally clears any CUPS "stopped" state caused by the sleep
+#   3. Waits 4s for the print engine to fully initialize
 #
 # Usage:
 #   wake-printer.sh              # wake all USB printers
 #   wake-printer.sh <printer>    # wake specific CUPS queue
 #
 # Called by:
-#   - CUPS pre-filter (before each print job)
-#   - printer-watchdog.sh (periodic health check)
+#   - usb-printer-wake-backend (before each print job)
 
 set -euo pipefail
 
@@ -73,18 +72,6 @@ except Exception as e:
 " 2>/dev/null
 }
 
-# Re-enable a CUPS queue if it got stopped due to sleep-related errors
-reenable_cups_queue() {
-    local printer="$1"
-    local state
-    state=$(lpstat -p "$printer" 2>/dev/null || true)
-    if echo "$state" | grep -qi "disabled\|stopped"; then
-        log "Re-enabling stopped queue: $printer"
-        cupsenable "$printer" 2>/dev/null || true
-        cupsaccept "$printer" 2>/dev/null || true
-    fi
-}
-
 wake_all() {
     local woke=0
     while IFS= read -r devpath; do
@@ -99,14 +86,15 @@ wake_all() {
         return 1
     fi
 
-    # Give the printer firmware a moment to re-initialize after reset
-    sleep 2
+    # Give the printer firmware time to re-initialize after reset.
+    # Brother printers need 4-5s for the print engine (not just USB enumeration).
+    # 2s caused blank pages because data arrived before the engine was ready.
+    sleep 4
 
-    # Re-enable any stopped CUPS queues
-    while IFS= read -r printer; do
-        [[ -z "$printer" ]] && continue
-        reenable_cups_queue "$printer"
-    done < <(lpstat -p 2>/dev/null | awk '{print $2}')
+    # NOTE: We do NOT re-enable stopped CUPS queues here.  That is the
+    # watchdog's job (runs every 10s).  Re-enabling here would mask real
+    # errors: if the printer is stopped because of a hardware fault, we
+    # don't want to blindly re-enable it on every wake attempt.
 
     log "Woke $woke USB printer device(s)"
     return 0
@@ -126,7 +114,9 @@ wake_specific() {
     # Wake all USB printers (simpler and more reliable than matching URIs
     # to sysfs paths, and most setups have exactly one USB printer)
     wake_all
-    reenable_cups_queue "$printer"
+    # NOTE: We do NOT re-enable the CUPS queue here.  The watchdog (10s timer)
+    # handles queue recovery.  Re-enabling here would mask real errors and
+    # create races with the backend wrapper.
 }
 
 if [[ -n "$PRINTER_NAME" ]]; then

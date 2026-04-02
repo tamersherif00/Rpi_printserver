@@ -1,68 +1,48 @@
 #!/bin/bash
-# Printer Watchdog
-# Periodically checks for printers stuck in "stopped" or error state,
-# re-enables them, and proactively wakes the USB printer from firmware
-# sleep so the next print job succeeds immediately.
+# Printer Watchdog - runs every 10s via systemd timer
 #
-# Designed to run as a systemd timer (every 30 seconds).
-#
-# Why: CUPS can mark a printer as stopped after transient USB errors
-# (printer sleep, cable hiccup, power glitch). ErrorPolicy=retry-job
-# handles in-flight jobs, but sometimes the queue itself gets paused.
-# Additionally, the printer's own firmware has a sleep mode that is
-# separate from Linux USB autosuspend — when asleep, the printer
-# ignores USB bulk transfers. This watchdog proactively wakes it.
+# 1. recover_printers: re-enables stopped/disabled printers (runs FIRST so
+#    Windows sees an enabled printer on its next IPP poll within ~10s)
+# 2. recover_stuck_jobs: cancels jobs stuck in processing for >120s
+# 3. cleanup_old_jobs: purges completed jobs older than 1 hour
 
-LOGPREFIX="[printer-watchdog]"
 WAKE_SCRIPT="/opt/printserver/scripts/wake-printer.sh"
+STUCK_JOB_TIMEOUT=120
 
 log_info() {
     logger -t printer-watchdog "$1"
 }
 
-# Proactively wake USB printer if there are pending jobs or if the
-# printer appears to be in an error state. This prevents the scenario
-# where a print job arrives, CUPS tries to send it, the printer is
-# asleep, the backend times out, and Windows gets an error.
-wake_sleeping_printer() {
-    [[ -x "$WAKE_SCRIPT" ]] || return 0
-
-    local needs_wake=0
-
-    # Wake if there are any pending/held jobs waiting to print
-    if lpstat -o 2>/dev/null | grep -q .; then
-        log_info "Pending jobs found — waking printer"
-        needs_wake=1
-    fi
-
-    # Wake if any printer is in stopped/error state
-    if lpstat -p 2>/dev/null | grep -qi "disabled\|stopped"; then
-        log_info "Stopped printer detected — waking printer"
-        needs_wake=1
-    fi
-
-    if [[ $needs_wake -eq 1 ]]; then
-        "$WAKE_SCRIPT" 2>/dev/null || true
-    fi
+# Extract numeric job ID from lpstat -o line (handles hyphenated printer names)
+extract_job_id() {
+    echo "$1" | awk '{print $1}' | grep -oP '\d+$'
 }
 
-# Get all stopped/disabled printers
+# Extract printer name from lpstat -o line (everything before -JobID)
+extract_printer_name() {
+    local printer_and_id
+    printer_and_id=$(echo "$1" | awk '{print $1}')
+    local jid
+    jid=$(echo "$printer_and_id" | grep -oP '\d+$')
+    echo "$printer_and_id" | sed "s/-${jid}$//"
+}
+
 recover_printers() {
     local recovered=0
 
-    # Check for printers in stopped state (state 5)
+    # Re-enable printers in stopped/disabled state
     while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        local printer
         printer=$(echo "$line" | awk '{print $2}')
-        if [[ -z "$printer" ]]; then
-            continue
-        fi
+        [[ -z "$printer" ]] && continue
 
-        # Check if the printer's USB device is actually present
+        # Only recover if USB device is physically present
+        local printer_uri
         printer_uri=$(lpstat -v "$printer" 2>/dev/null | awk '{print $4}')
         if [[ "$printer_uri" == usb://* ]]; then
-            # Only recover if a USB printer device exists
-            if ! lpinfo -v 2>/dev/null | grep -q "usb://"; then
-                log_info "Skipping $printer — USB device not connected"
+            if ! grep -r -l "07" /sys/bus/usb/devices/*/bInterfaceClass >/dev/null 2>&1; then
+                log_info "Skipping $printer - USB device not connected"
                 continue
             fi
         fi
@@ -70,20 +50,20 @@ recover_printers() {
         log_info "Recovering stopped printer: $printer"
         cupsenable "$printer" 2>/dev/null || true
         cupsaccept "$printer" 2>/dev/null || true
+        # Clear stale error message so Windows doesn't cache "Offline"
+        lpadmin -p "$printer" -o printer-state-message="" 2>/dev/null || true
         ((recovered++))
-    done < <(lpstat -p 2>/dev/null | grep -i "disabled\|stopped")
+    done < <(lpstat -p 2>/dev/null | grep -iE "disabled|stopped")
 
-    # Also check for printers not accepting jobs
+    # Also fix printers that are idle but not accepting jobs
     while IFS= read -r printer; do
-        if [[ -n "$printer" ]]; then
-            state=$(lpoptions -p "$printer" 2>/dev/null | grep -oP 'printer-state=\K\d+' || echo "")
-            accepting=$(lpoptions -p "$printer" 2>/dev/null | grep -oP 'printer-is-accepting-jobs=\K\w+' || echo "")
-
-            if [[ "$accepting" == "false" ]]; then
-                log_info "Re-enabling job acceptance on: $printer"
-                cupsaccept "$printer" 2>/dev/null || true
-                ((recovered++))
-            fi
+        [[ -z "$printer" ]] && continue
+        local accept_line
+        accept_line=$(lpstat -a "$printer" 2>/dev/null)
+        if echo "$accept_line" | grep -qi "not accepting"; then
+            log_info "Re-enabling job acceptance on: $printer"
+            cupsaccept "$printer" 2>/dev/null || true
+            ((recovered++))
         fi
     done < <(lpstat -p 2>/dev/null | awk '{print $2}')
 
@@ -92,73 +72,107 @@ recover_printers() {
     fi
 }
 
-cleanup_old_jobs() {
-    # Purge completed jobs older than 1 hour to free memory and disk on 1GB Pi.
-    # CUPS keeps job metadata in RAM; hundreds of stale jobs cause bloat.
-    local purged=0
-    while IFS= read -r job_entry; do
-        job_id=$(echo "$job_entry" | awk '{print $1}' | cut -d'-' -f2)
-        if [[ -n "$job_id" ]]; then
-            cancel -x "$job_id" 2>/dev/null && ((purged++)) || true
-        fi
-    done < <(lpstat -W completed -o 2>/dev/null)
-    if [[ $purged -gt 0 ]]; then
-        log_info "Purged $purged completed job(s)"
-    fi
-}
-
-# Detect jobs stuck in "processing" state for too long (>90 seconds).
-# This happens when the USB backend hangs because the printer was asleep
-# when the backend opened the device. Cancel and re-queue the job so it
-# gets retried with a fresh USB connection (via the wake backend).
 recover_stuck_jobs() {
     local now
     now=$(date +%s)
+    local recovered=0
 
     while IFS= read -r line; do
         [[ -z "$line" ]] && continue
-        local job_id printer_and_id
-        printer_and_id=$(echo "$line" | awk '{print $1}')
-        job_id=$(echo "$printer_and_id" | cut -d'-' -f2-)
 
-        # Get job state: 5 = processing
-        local state
-        state=$(lpoptions -p "$(echo "$printer_and_id" | cut -d'-' -f1)" 2>/dev/null | grep -oP 'job-state=\K\d+' || echo "")
+        local job_id
+        job_id=$(extract_job_id "$line")
+        [[ -z "$job_id" ]] && continue
 
-        # Check how long the job has been processing using lpstat output
-        # If the job is in the active list, it's currently processing
-        local active_job
-        active_job=$(lpstat -o 2>/dev/null | grep "$printer_and_id" || true)
-        if [[ -n "$active_job" ]]; then
-            # Job exists and is active — check if printer state says processing
-            local printer_state
-            printer_state=$(lpstat -p 2>/dev/null | head -1)
-            if echo "$printer_state" | grep -qi "printing\|processing"; then
-                # Use a marker file to track how long we've seen this job processing
-                local marker="/tmp/stuck-job-${job_id}"
-                if [[ -f "$marker" ]]; then
-                    local started
-                    started=$(cat "$marker")
-                    local elapsed=$(( now - started ))
-                    if [[ $elapsed -gt 90 ]]; then
-                        log_info "Job $job_id stuck processing for ${elapsed}s — canceling for retry"
-                        cancel "$job_id" 2>/dev/null || true
-                        rm -f "$marker"
-                        # Wake the printer so the next attempt works
-                        [[ -x "$WAKE_SCRIPT" ]] && "$WAKE_SCRIPT" 2>/dev/null || true
-                    fi
-                else
-                    echo "$now" > "$marker"
-                fi
+        local printer_name
+        printer_name=$(extract_printer_name "$line")
+
+        # Check if job is actually processing (not just pending in queue)
+        local is_processing=0
+        local job_info
+        job_info=$(lpstat -l -o 2>/dev/null | grep -A5 "^${printer_name}-${job_id} " || true)
+        if echo "$job_info" | grep -qi "Status:.*processing\|printing"; then
+            is_processing=1
+        fi
+        if [[ $is_processing -eq 0 ]]; then
+            local printer_status
+            printer_status=$(lpstat -p "$printer_name" 2>/dev/null || true)
+            if echo "$printer_status" | grep -qi "printing\|processing"; then
+                is_processing=1
+            fi
+        fi
+
+        if [[ $is_processing -eq 0 ]]; then
+            # Job is pending (queued or waiting for retry), not stuck
+            rm -f "/tmp/stuck-job-${job_id}" 2>/dev/null
+            continue
+        fi
+
+        # Track how long this job has been in processing state
+        local marker="/tmp/stuck-job-${job_id}"
+        if [[ -f "$marker" ]]; then
+            local started
+            started=$(cat "$marker" 2>/dev/null || echo "$now")
+            local elapsed=$(( now - started ))
+            if [[ $elapsed -gt $STUCK_JOB_TIMEOUT ]]; then
+                log_info "Job $job_id stuck processing for ${elapsed}s - canceling"
+                cancel "$job_id" 2>/dev/null || true
+                rm -f "$marker"
+                ((recovered++))
             fi
         else
-            # Job no longer active, clean up marker
-            rm -f "/tmp/stuck-job-${job_id}" 2>/dev/null
+            echo "$now" > "$marker"
         fi
     done < <(lpstat -o 2>/dev/null)
+
+    # Clean up markers for jobs no longer in the active queue
+    for marker in /tmp/stuck-job-*; do
+        [[ -f "$marker" ]] || continue
+        local mid
+        mid=$(basename "$marker" | sed 's/stuck-job-//')
+        if ! lpstat -o 2>/dev/null | grep -q "\-${mid} "; then
+            rm -f "$marker"
+        fi
+    done
+
+    if [[ $recovered -gt 0 ]]; then
+        log_info "Canceled $recovered stuck job(s)"
+    fi
 }
 
-wake_sleeping_printer
-recover_stuck_jobs
+cleanup_old_jobs() {
+    local now
+    now=$(date +%s)
+    local purged=0
+    local max_age=3600
+
+    while IFS= read -r job_entry; do
+        [[ -z "$job_entry" ]] && continue
+        local job_id
+        job_id=$(extract_job_id "$job_entry")
+        [[ -z "$job_id" ]] && continue
+
+        # Check spool file age if it exists
+        local spool_file="/var/spool/cups/d${job_id}-001"
+        if [[ -f "$spool_file" ]]; then
+            local file_time
+            file_time=$(stat -c %Y "$spool_file" 2>/dev/null || echo "$now")
+            local age=$(( now - file_time ))
+            if [[ $age -gt $max_age ]]; then
+                cancel -x "$job_id" 2>/dev/null && ((purged++)) || true
+            fi
+        fi
+        # If no spool file, CUPS already cleaned it up via PreserveJobFiles.
+        # Don't purge the metadata - let CUPS manage its own history.
+    done < <(lpstat -W completed -o 2>/dev/null)
+
+    if [[ $purged -gt 0 ]]; then
+        log_info "Purged $purged completed job(s) older than 1h"
+    fi
+}
+
+# Order matters: recover printers FIRST so Windows sees an enabled printer
+# on its next poll, then handle stuck jobs, then clean up.
 recover_printers
+recover_stuck_jobs
 cleanup_old_jobs

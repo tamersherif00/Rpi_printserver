@@ -1,33 +1,15 @@
 #!/bin/bash
-# cups-pre-filter-wake.sh — CUPS filter that wakes the printer before printing
+# cups-pre-filter-wake.sh â€” DISABLED pass-through filter
 #
-# Installed as a CUPS filter with order 0 (runs before all other filters).
-# CUPS calls filters with: filter job user title copies options [filename]
+# Previously this filter sent a USB reset to wake the printer before each job.
+# This caused double/triple USB resets (combined with the backend wrapper and
+# systemd path unit), confusing Brother printer firmware into blank-page loops.
 #
-# This filter:
-#   1. Sends a USB reset to wake the printer from firmware sleep
-#   2. Waits briefly for the printer to initialize
-#   3. Passes data through unchanged (cat) to the next filter in the chain
+# Wake responsibility now lives exclusively in usb-printer-wake-backend.
 #
-# Why a filter and not a backend wrapper:
-#   Filters run BEFORE the backend tries to open the USB device, giving the
-#   printer time to wake up. A backend wrapper would be too late — the USB
-#   open() would already fail or timeout before we could intervene.
-
-WAKE_SCRIPT="/opt/printserver/scripts/wake-printer.sh"
-
-# Log to CUPS (stderr goes to error_log)
-log() {
-    echo "INFO: [wake-filter] $*" >&2
-}
-
-# Extract printer name from environment (CUPS sets PRINTER)
-PRINTER="${PRINTER:-}"
-
-if [[ -x "$WAKE_SCRIPT" ]]; then
-    log "Waking printer '$PRINTER' before job $1"
-    "$WAKE_SCRIPT" "$PRINTER" 2>/dev/null || true
-fi
+# This script is kept as a pure pass-through so that any old CUPS filter
+# registrations (printserver-wake.convs) don't break the filter chain.
+# It does NO wake operations â€” just passes data through unchanged.
 
 # Pass-through: if a filename was given as $6, cat it; otherwise cat stdin.
 # This is the standard CUPS filter pass-through pattern.

@@ -3,6 +3,12 @@
 *.service text eol=lf
 *.template text eol=lf
 *.rules text eol=lf
+*.timer text eol=lf
+*.path text eol=lf
+*.convs text eol=lf
+# Backend wrapper has no extension but is a bash script
+usb-printer-wake-backend text eol=lf
+scripts/usb-printer-wake-backend text eol=lf
 
 # Python files
 *.py text eol=lf

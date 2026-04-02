@@ -66,7 +66,7 @@ install_system_packages() {
     log_info "Updating package lists..."
     apt-get update
 
-    # ── Mandatory packages ────────────────────────────────────────────────────
+    # â”€â”€ Mandatory packages â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # These are required for the print server to function; exit on failure.
     log_info "Installing required packages..."
     apt-get install -y \
@@ -81,7 +81,7 @@ install_system_packages() {
         samba \
         wireless-tools
 
-    # ── Optional system packages ──────────────────────────────────────────────
+    # â”€â”€ Optional system packages â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # Package names and availability vary across Debian/Raspbian releases
     # (e.g. cups-browsed was split from cups-filters in Debian Trixie+).
     # Install each individually so a missing package doesn't abort the script.
@@ -89,15 +89,15 @@ install_system_packages() {
         if apt-get install -y "$pkg" 2>/dev/null; then
             log_info "  installed: $pkg"
         else
-            log_warn "$pkg not available in current repos — skipping (non-fatal)"
+            log_warn "$pkg not available in current repos â€” skipping (non-fatal)"
         fi
     done
 
-    # ── wsdd: Windows 10/11 auto-discovery via WS-Discovery ──────────────────
+    # â”€â”€ wsdd: Windows 10/11 auto-discovery via WS-Discovery â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # Strategy:
     #   1. Try apt  (available on Bullseye/Bookworm; removed from Trixie+).
     #   2. Download the standalone Python script from the upstream GitHub repo.
-    #      wsdd is NOT published to PyPI — pip install wsdd will always fail.
+    #      wsdd is NOT published to PyPI â€” pip install wsdd will always fail.
     #   3. Warn and provide manual-add instructions if both methods fail.
     if apt-get install -y wsdd 2>/dev/null; then
         log_info "wsdd installed from apt"
@@ -120,7 +120,7 @@ install_system_packages() {
             fi
         fi
     else
-        log_info "apt wsdd unavailable — downloading from GitHub (christgau/wsdd)..."
+        log_info "apt wsdd unavailable â€” downloading from GitHub (christgau/wsdd)..."
         WSDD_BIN="/usr/local/bin/wsdd"
         if wget -q -O "$WSDD_BIN" \
                "https://raw.githubusercontent.com/christgau/wsdd/master/src/wsdd.py" \
@@ -158,13 +158,13 @@ WSDD_EOF
         fi
     fi
 
-    # ── Optional printer drivers ──────────────────────────────────────────────
+    # â”€â”€ Optional printer drivers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     log_info "Installing printer drivers (where available)..."
     for pkg in printer-driver-brlaser printer-driver-cups-pdf printer-driver-gutenprint; do
         if apt-cache show "$pkg" > /dev/null 2>&1; then
             apt-get install -y "$pkg" && log_info "  installed: $pkg"
         else
-            log_warn "  $pkg not available in current repos — skipping"
+            log_warn "  $pkg not available in current repos â€” skipping"
         fi
     done
 
@@ -331,22 +331,23 @@ install_systemd_service() {
 
     cp "$PROJECT_DIR/config/systemd/printserver-web.service" /etc/systemd/system/
 
-    # Install printer watchdog timer — auto-recovers printers stuck in
+    # Install printer watchdog timer â€” auto-recovers printers stuck in
     # "stopped" or "failed" state (e.g. after USB sleep or transient error)
     cp "$PROJECT_DIR/config/systemd/printer-watchdog.service" /etc/systemd/system/
     cp "$PROJECT_DIR/config/systemd/printer-watchdog.timer" /etc/systemd/system/
     cp "$SCRIPT_DIR/printer-watchdog.sh" "$INSTALL_DIR/scripts/"
     chmod +x "$INSTALL_DIR/scripts/printer-watchdog.sh"
 
-    # Install printer wake script — sends USB reset to wake printer from
+    # Install printer wake script â€” sends USB reset to wake printer from
     # firmware sleep mode (separate from kernel USB autosuspend)
     cp "$SCRIPT_DIR/wake-printer.sh" "$INSTALL_DIR/scripts/"
     chmod +x "$INSTALL_DIR/scripts/wake-printer.sh"
 
     # Install USB backend wrapper that wakes the printer BEFORE the real
-    # USB backend opens the device. This prevents the backend from hanging
-    # indefinitely when the printer is in firmware sleep mode.
-    # The real backend is moved to usb.real; our wrapper takes its place.
+    # USB backend opens the device.  This is the SOLE wake mechanism.
+    # Previous versions also had a CUPS pre-filter and systemd path unit
+    # that sent additional USB resets; those caused blank-page loops on
+    # Brother printers and have been removed.
     local usb_backend="/usr/lib/cups/backend/usb"
     local usb_real="/usr/lib/cups/backend/usb.real"
     if [[ -f "$usb_backend" && ! -L "$usb_backend" && ! -f "$usb_real" ]]; then
@@ -357,14 +358,23 @@ install_systemd_service() {
     chmod 700 "$usb_backend"
     log_info "USB wake backend wrapper installed"
 
-    # Install systemd path unit that watches /var/spool/cups for new jobs
-    # and immediately wakes the USB printer. This prevents the "first print
-    # after idle fails" problem where the printer's firmware is asleep and
-    # ignores USB data from CUPS.
+    # Disable the old printer-wake path unit if it was previously enabled.
+    # Wake responsibility now lives exclusively in the backend wrapper.
+    # The path unit caused overlapping USB resets â†’ blank page loops.
+    systemctl disable --now printer-wake.path 2>/dev/null || true
+    systemctl disable --now printer-wake.service 2>/dev/null || true
+    # Copy the disabled unit files so systemd doesn't complain about dangling symlinks
     cp "$PROJECT_DIR/config/systemd/printer-wake.path" /etc/systemd/system/
     cp "$PROJECT_DIR/config/systemd/printer-wake.service" /etc/systemd/system/
-    systemctl enable --now printer-wake.path 2>/dev/null || true
-    log_info "Printer wake path unit installed"
+    log_info "Printer wake path unit disabled (wake handled by backend wrapper)"
+
+    # Remove the old CUPS pre-filter registration if present.
+    # The filter caused additional USB resets on top of the backend wrapper.
+    local convs_file="/usr/share/cups/mime/printserver-wake.convs"
+    if [[ -f "$convs_file" ]]; then
+        cp "$PROJECT_DIR/config/cups/printserver-wake.convs" "$convs_file"
+        log_info "CUPS wake filter disabled (replaced with empty convs)"
+    fi
 
     systemctl daemon-reload
     systemctl enable printserver-web.service
@@ -478,7 +488,7 @@ NMEOF
     # Method 2: udev rule (works even without NetworkManager)
     local udev_wifi="/etc/udev/rules.d/70-wifi-powersave.rules"
     cat > "$udev_wifi" << 'UDEVEOF'
-# Disable WiFi power-save on interface up — ensures fast mDNS responses
+# Disable WiFi power-save on interface up â€” ensures fast mDNS responses
 ACTION=="add", SUBSYSTEM=="net", KERNEL=="wlan*", RUN+="/usr/sbin/iw dev %k set power_save off"
 UDEVEOF
     log_info "Created udev rule for WiFi power-save"
@@ -497,7 +507,7 @@ configure_usb_power() {
     # doesn't go into a low-power state between print jobs.
     local udev_usb="/etc/udev/rules.d/71-usb-printer-power.rules"
     cat > "$udev_usb" << 'USBEOF'
-# Keep USB printers awake — disable kernel autosuspend for printer class (07)
+# Keep USB printers awake â€” disable kernel autosuspend for printer class (07)
 ACTION=="add", SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", TEST=="power/autosuspend", ATTR{power/autosuspend}="-1"
 ACTION=="add", SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", TEST=="power/control", ATTR{power/control}="on"
 USBEOF
@@ -557,7 +567,7 @@ start_services() {
     systemctl start wsdd 2>/dev/null || true
     systemctl start printserver-web
 
-    # Verify with health check (retry a few times — gunicorn needs time to bind)
+    # Verify with health check (retry a few times â€” gunicorn needs time to bind)
     local attempt=1
     while [[ $attempt -le 5 ]]; do
         if curl -s -o /dev/null -w "%{http_code}" http://localhost:5000/health 2>/dev/null | grep -q "200"; then
@@ -612,7 +622,7 @@ restart_services() {
         log_warn "  systemctl status cups avahi-daemon smbd printserver-web"
     fi
 
-    # Verify web interface health (retry a few times — gunicorn needs time to bind)
+    # Verify web interface health (retry a few times â€” gunicorn needs time to bind)
     local attempt=1
     while [[ $attempt -le 5 ]]; do
         if curl -s -o /dev/null -w "%{http_code}" http://localhost:5000/health 2>/dev/null | grep -q "200"; then
@@ -641,7 +651,7 @@ detect_printer() {
             log_info "Found USB printer: $PRINTER_URI (attempt $attempt)"
 
             # Extract printer name from URI
-            # e.g. usb://Brother/HL-L2340D%20series?serial=... → Brother_HL-L2340D_series
+            # e.g. usb://Brother/HL-L2340D%20series?serial=... â†’ Brother_HL-L2340D_series
             PRINTER_NAME=$(echo "$PRINTER_URI" \
                 | sed 's|usb://||' \
                 | sed 's|%[0-9A-Fa-f]\{2\}| |g' \
@@ -662,7 +672,7 @@ detect_printer() {
                 elif lpadmin -p "$PRINTER_NAME" -E -v "$PRINTER_URI" -m "drv:///cupsfilters.drv/pwgrast.ppd" 2>/dev/null; then
                     log_info "Printer added with PWG Raster driver"
                 else
-                    log_warn "All drivers failed — add printer via CUPS web UI"
+                    log_warn "All drivers failed â€” add printer via CUPS web UI"
                 fi
                 lpadmin -d "$PRINTER_NAME"  # Set as default
                 log_info "Printer set as default"
@@ -723,15 +733,15 @@ print_summary() {
     log_info "Web interface: http://${PI_IP}:5000"
     log_info "CUPS admin:    http://${PI_IP}:631"
     echo
-    log_info "── Windows printing ─────────────────────────────────────────"
+    log_info "â”€â”€ Windows printing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€"
     log_info "  Recommended (IPP, no password needed):"
-    log_info "    Settings → Printers → Add → 'not listed' → 'by name' →"
+    log_info "    Settings â†’ Printers â†’ Add â†’ 'not listed' â†’ 'by name' â†’"
     log_info "    http://${PI_IP}:631/printers/<PrinterName>"
     echo
     log_info "  SMB path (File Explorer): \\\\${PI_IP}"
     log_info "    Username: printuser"
     log_info "    Password: printserver  (change: sudo smbpasswd printuser)"
-    log_info "─────────────────────────────────────────────────────────────"
+    log_info "â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€"
     echo
     log_info "To check status: sudo systemctl status printserver-web"
     log_info "To view logs:    sudo journalctl -u printserver-web -f"

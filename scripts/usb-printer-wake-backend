@@ -1,15 +1,14 @@
 #!/bin/bash
-# usb-printer-wake-backend — CUPS backend wrapper that wakes USB printers
+# usb-printer-wake-backend - CUPS backend wrapper that wakes USB printers
 #
 # Replaces /usr/lib/cups/backend/usb (the original is moved to usb.real).
 # Before passing the job to the real backend, it sends a USB reset to
 # wake the printer from firmware sleep mode.
 #
-# Why: The real USB backend opens the device and blocks on write if the
-# printer is asleep. By the time the watchdog or wake-printer.sh runs,
-# the backend already holds the USB file descriptor — the reset can't
-# interrupt it. This wrapper wakes FIRST, then hands off to the real
-# backend, so the printer is always awake when data transfer begins.
+# This is the SOLE wake mechanism.  Previous versions also had a CUPS
+# pre-filter and a systemd path unit that sent additional USB resets;
+# those caused double/triple resets that confused Brother printer firmware
+# into printing blank pages.  They have been removed.
 #
 # CUPS backend interface:
 #   Called with 0 args: list available devices (discovery mode)
@@ -25,8 +24,21 @@ WAKE_SCRIPT="/opt/printserver/scripts/wake-printer.sh"
 MAX_WAKE_ATTEMPTS=3
 WAKE_DELAY=3
 
+# Brother printers need 4-5s after USB reset for the print engine to
+# fully initialize.  2s was enough for USB enumeration but NOT for the
+# print engine, causing blank pages when data arrived too early.
+POST_WAKE_SETTLE=4
+
+# Lock file to prevent concurrent wake attempts from multiple jobs.
+# Overlapping USB resets are the primary cause of blank-page loops.
+WAKE_LOCK="/tmp/usb-printer-wake.lock"
+
 log() {
     echo "INFO: [usb-wake] $*" >&2
+}
+
+error() {
+    echo "ERROR: [usb-wake] $*" >&2
 }
 
 # Discovery mode: just pass through to real USB backend
@@ -34,32 +46,79 @@ if [[ $# -eq 0 ]]; then
     exec "$REAL_USB_BACKEND"
 fi
 
-# Print mode: wake printer, then hand off
+# Verify the real backend exists before we do anything
+if [[ ! -x "$REAL_USB_BACKEND" ]]; then
+    error "Real USB backend not found at $REAL_USB_BACKEND"
+    exit 1
+fi
+
 job_id="$1"
+log "Job $job_id - waking printer before sending"
 
-log "Job $job_id — waking printer before sending"
 
-# Send USB reset to wake the printer from firmware sleep
-for attempt in $(seq 1 $MAX_WAKE_ATTEMPTS); do
-    if [[ -x "$WAKE_SCRIPT" ]]; then
-        "$WAKE_SCRIPT" 2>/dev/null || true
+# Use a lock to serialize wake attempts across concurrent jobs.
+(
+    flock -w 30 200 || {
+        log "Job $job_id - could not acquire wake lock, proceeding anyway"
+    }
+
+    # Check if another job already woke the printer recently.
+    # If so, just wait for the remaining settle time instead of resetting again.
+    need_wake=1
+    if [[ -f "$WAKE_LOCK.done" ]]; then
+        last_wake=$(stat -c %Y "$WAKE_LOCK.done" 2>/dev/null || echo 0)
+        now=$(date +%s)
+        elapsed=$(( now - last_wake ))
+        if [[ $elapsed -lt $POST_WAKE_SETTLE ]]; then
+            remaining=$(( POST_WAKE_SETTLE - elapsed ))
+            log "Job $job_id - printer woken ${elapsed}s ago, waiting ${remaining}s"
+            sleep "$remaining"
+            need_wake=0
+        fi
     fi
 
-    # Verify a USB printer device exists in sysfs
-    if grep -r -l "07" /sys/bus/usb/devices/*/bInterfaceClass >/dev/null 2>&1; then
-        log "USB printer ready (attempt $attempt)"
-        break
-    fi
+    if [[ $need_wake -eq 1 ]]; then
+        # Send USB reset to wake the printer from firmware sleep
+        wake_success=0
+        for attempt in $(seq 1 $MAX_WAKE_ATTEMPTS); do
+            if [[ -x "$WAKE_SCRIPT" ]]; then
+                # wake-printer.sh handles: USB reset + 4s settle.
+                # Queue re-enabling is handled by the watchdog (10s timer),
+                # NOT by the wake script.
+                "$WAKE_SCRIPT" 2>/dev/null && wake_success=1 && break
+            fi
 
-    if [[ $attempt -lt $MAX_WAKE_ATTEMPTS ]]; then
-        log "Printer not responding, retry in ${WAKE_DELAY}s ($attempt/$MAX_WAKE_ATTEMPTS)"
-        sleep "$WAKE_DELAY"
-    fi
-done
+            # Verify a USB printer device exists in sysfs
+            if grep -r -l "07" /sys/bus/usb/devices/*/bInterfaceClass >/dev/null 2>&1; then
+                log "USB printer present (attempt $attempt)"
+                wake_success=1
+                break
+            fi
 
-# Give the printer firmware a moment to fully initialize after wake
-sleep 2
+            if [[ $attempt -lt $MAX_WAKE_ATTEMPTS ]]; then
+                log "Printer not responding, retry in ${WAKE_DELAY}s ($attempt/$MAX_WAKE_ATTEMPTS)"
+                sleep "$WAKE_DELAY"
+            fi
+        done
+
+        if [[ $wake_success -eq 0 ]]; then
+            error "Job $job_id - USB printer not found after $MAX_WAKE_ATTEMPTS attempts"
+            # Don't exit 1 here - let the real backend try and report the
+            # proper CUPS error code so retry-job can handle it.
+        fi
+
+        # Record when we last woke the printer
+        touch "$WAKE_LOCK.done" 2>/dev/null || true
+    fi
+) 200>"$WAKE_LOCK"
+
+
+# Clean up stale done marker (older than 60s means printer likely asleep again)
+if [[ -f "$WAKE_LOCK.done" ]]; then
+    age=$(( $(date +%s) - $(stat -c %Y "$WAKE_LOCK.done" 2>/dev/null || echo 0) ))
+    [[ $age -gt 60 ]] && rm -f "$WAKE_LOCK.done" 2>/dev/null
+fi
 
 # Hand off to the real USB backend with all original arguments
-log "Passing job to real USB backend"
+log "Passing job $job_id to real USB backend"
 exec "$REAL_USB_BACKEND" "$@"

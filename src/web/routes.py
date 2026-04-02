@@ -43,7 +43,9 @@ RESTART_SCRIPT = "/opt/printserver/scripts/restart-service.sh"
 # Simple TTL cache for expensive subprocess-heavy functions.
 # Each entry stores (timestamp, value, ttl) so eviction uses each entry's
 # own TTL rather than the current caller's TTL.
+# Hard cap at 50 entries to prevent unbounded memory growth on 1GB Pi.
 _cache: dict[str, tuple[float, Any, float]] = {}
+_CACHE_MAX_ENTRIES = 50
 
 
 def _cached_call(key: str, fn, ttl_seconds: float):
@@ -51,8 +53,7 @@ def _cached_call(key: str, fn, ttl_seconds: float):
 
     Also evicts any fully-expired entries (older than 2× their own TTL) to
     prevent the cache dict from holding stale large dicts indefinitely.
-    Each entry's TTL is stored alongside its value so that eviction is based
-    on the entry's own TTL, not the current caller's TTL.
+    Enforces a hard cap of _CACHE_MAX_ENTRIES to bound memory usage.
     """
     now = time.monotonic()
     # Evict entries older than 2× their own stored TTL
@@ -64,7 +65,14 @@ def _cached_call(key: str, fn, ttl_seconds: float):
         cached_time, cached_value, _ = _cache[key]
         if now - cached_time < ttl_seconds:
             return cached_value
+
     result = fn()
+
+    # Enforce hard cap: if at limit, evict the oldest entry
+    if len(_cache) >= _CACHE_MAX_ENTRIES and key not in _cache:
+        oldest_key = min(_cache, key=lambda k: _cache[k][0])
+        del _cache[oldest_key]
+
     _cache[key] = (now, result, ttl_seconds)
     return result
 
@@ -488,13 +496,15 @@ def register_routes(app: Flask) -> None:
 
         try:
             client = get_cups_client(app)
-            printers = _cached_call("printers_all", lambda: get_all_printers(client), 30)
+            printers = _cached_call("printers_all", lambda: get_all_printers(client), 15)
             # Use "not-completed" to avoid caching the full CUPS job history
             # (which can be 500+ objects). Status only needs active/pending counts.
+            # Short 5s TTL so job state transitions (processing -> completed)
+            # appear promptly in the dashboard and don't look stuck.
             jobs = _cached_call(
                 "jobs_active",
                 lambda: get_all_jobs(client, which_jobs="not-completed"),
-                30,
+                5,
             )
         except CupsClientError as e:
             cups_error = True

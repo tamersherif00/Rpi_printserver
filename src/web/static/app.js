@@ -7,8 +7,8 @@
 let connectionOk = true;
 let retryCount = 0;
 const MAX_RETRIES = 3;
-const BASE_INTERVAL = 30000;  // 30s normal polling
-const FAST_INTERVAL = 5000;   // 5s when recovering
+const BASE_INTERVAL = 10000;  // 10s normal polling (was 30s - too slow for job status)
+const FAST_INTERVAL = 3000;   // 3s when recovering or jobs are active
 const FETCH_TIMEOUT = 10000;  // 10s fetch timeout
 
 /**
@@ -188,7 +188,7 @@ function updateJobsTable(jobs) {
     if (jobs.length === 0) {
         tbody.innerHTML = `
             <tr>
-                <td colspan="7" class="text-center text-muted py-4">
+                <td colspan="10" class="text-center text-muted py-4">
                     <i class="bi bi-inbox fs-1"></i>
                     <p class="mt-2">No print jobs in queue</p>
                 </td>
@@ -197,18 +197,38 @@ function updateJobsTable(jobs) {
         return;
     }
 
-    tbody.innerHTML = jobs.map(job => `
+    tbody.innerHTML = jobs.map(job => {
+        // Build the "From" cell: show username if meaningful, otherwise IP
+        let fromCell;
+        const hasUser = job.user && job.user !== 'anonymous' && job.user !== 'unknown';
+        const hasHost = job.origin_host && job.origin_host.length > 0;
+        if (hasUser && hasHost) {
+            fromCell = `${escapeHtml(job.user)}<br><small class="text-muted">${escapeHtml(job.origin_host)}</small>`;
+        } else if (hasUser) {
+            fromCell = escapeHtml(job.user);
+        } else if (hasHost) {
+            fromCell = `<i class="bi bi-pc-display-horizontal"></i> ${escapeHtml(job.origin_host)}`;
+        } else {
+            fromCell = '<span class="text-muted">unknown</span>';
+        }
+
+        // Status cell with optional state message
+        let statusCell = `<span class="badge ${getStatusBadgeClass(job.state)}">${formatState(job.state)}</span>`;
+        if (job.state_message) {
+            statusCell += `<br><small class="text-muted" title="${escapeHtml(job.state_message)}">${escapeHtml(truncate(job.state_message, 30))}</small>`;
+        }
+
+        return `
         <tr data-job-id="${job.id}" class="job-row">
             <td>${job.id}</td>
-            <td>${escapeHtml(job.title)}</td>
-            <td>${escapeHtml(job.user)}</td>
-            <td>
-                <span class="badge ${getStatusBadgeClass(job.state)}">
-                    ${formatState(job.state)}
-                </span>
-            </td>
+            <td title="${escapeHtml(job.title)}">${escapeHtml(truncate(job.title, 40))}</td>
+            <td>${fromCell}</td>
+            <td>${escapeHtml(job.printer_name || '-')}</td>
+            <td>${statusCell}</td>
             <td>${job.pages ? `${job.pages_completed}/${job.pages}` : '-'}</td>
+            <td>${job.size_display || '-'}</td>
             <td>${job.created_at ? formatDate(job.created_at) : '-'}</td>
+            <td>${job.duration || '-'}</td>
             <td>
                 ${canCancel(job.state) ?
                     `<button class="btn btn-sm btn-danger" onclick="cancelJob(${job.id})">
@@ -218,16 +238,19 @@ function updateJobsTable(jobs) {
                 }
             </td>
         </tr>
-    `).join('');
+    `}).join('');
 }
 
 /**
- * Update job statistics
+ * Update job statistics and track active jobs for adaptive polling
  */
 function updateJobStats(jobs) {
     const pending = jobs.filter(j => ['pending', 'pending-held'].includes(j.state)).length;
     const processing = jobs.filter(j => ['processing', 'processing-stopped'].includes(j.state)).length;
     const completed = jobs.filter(j => ['completed', 'canceled', 'aborted'].includes(j.state)).length;
+
+    // Track active jobs so polling can speed up/slow down
+    hasActiveJobs = processing > 0 || pending > 0;
 
     updateStatElement('stat-total', jobs.length);
     updateStatElement('stat-pending', pending);
@@ -331,6 +354,15 @@ function escapeHtml(text) {
 }
 
 /**
+ * Truncate a string to maxLen characters with ellipsis
+ */
+function truncate(text, maxLen) {
+    if (!text) return '';
+    if (text.length <= maxLen) return text;
+    return text.substring(0, maxLen) + '...';
+}
+
+/**
  * Show a toast notification
  */
 function showToast(message, type = 'info') {
@@ -360,9 +392,14 @@ function showToast(message, type = 'info') {
 
 // --- Adaptive Polling ---
 
+// Track whether there are active (processing) jobs to poll faster
+let hasActiveJobs = false;
+
 /**
- * Start adaptive polling. Polls faster when disconnected to detect recovery quickly.
- * Detects the current page and polls the appropriate endpoint.
+ * Start adaptive polling. Polls faster when:
+ * - Connection is recovering (FAST_INTERVAL)
+ * - Jobs are actively processing (FAST_INTERVAL) - so status updates appear quickly
+ * - Otherwise uses BASE_INTERVAL to reduce load on the Pi
  */
 function startPolling() {
     const isDashboard = !!document.getElementById('uptime');
@@ -375,12 +412,13 @@ function startPolling() {
             await refreshJobs();
         }
 
-        const interval = connectionOk ? BASE_INTERVAL : FAST_INTERVAL;
+        // Poll faster when disconnected OR when jobs are actively printing
+        const interval = (!connectionOk || hasActiveJobs) ? FAST_INTERVAL : BASE_INTERVAL;
         setTimeout(poll, interval);
     }
 
-    // Start first poll after a short delay
-    setTimeout(poll, connectionOk ? BASE_INTERVAL : FAST_INTERVAL);
+    // Start first poll quickly to show current state
+    setTimeout(poll, 1000);
 }
 
 // Initialize on page load

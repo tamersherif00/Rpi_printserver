@@ -45,6 +45,21 @@ WebInterface Yes
 # until someone manually re-enables it.
 ErrorPolicy retry-job
 
+# How long CUPS waits between retry attempts (seconds).
+# Default is 30s which is too long - Windows polls printer state every
+# ~10s and caches failures.  5s gives the wake backend time to work
+# while keeping the retry loop tight enough that Windows doesn't give up.
+# NOTE: JobRetryInterval is supported in CUPS 2.x on Debian/Raspbian.
+# If your CUPS version ignores it, the watchdog (10s timer) compensates
+# by re-enabling the printer before Windows caches the failure.
+JobRetryInterval 5
+
+# Maximum number of times CUPS will retry a failed job before giving up.
+# With 5s intervals, 10 retries = 50s total retry window.  The wake
+# backend needs at most ~12s (3 attempts x 4s settle), so 10 retries
+# gives plenty of margin.
+JobRetryLimit 10
+
 # Preserve jobs across restarts and retry cycles.
 # Documents are spooled on the Pi (not passed through inline), so they
 # survive printer sleep, USB reconnects, and CUPS restarts. Increased

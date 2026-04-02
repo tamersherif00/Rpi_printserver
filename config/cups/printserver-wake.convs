@@ -1,8 +1,13 @@
-# CUPS filter registration for printer wake pre-filter
-# Installed to /usr/share/cups/mime/printserver-wake.convs
+# CUPS filter registration â€” DISABLED
 #
-# This registers a cost-0 filter that runs before all other filters.
-# It wakes the USB printer from firmware sleep, then passes data through.
+# Previously registered a cost-0 filter (cups-pre-filter-wake.sh) that sent
+# a USB reset before every print job.  This caused DOUBLE or TRIPLE USB resets
+# (path unit + filter + backend wrapper), confusing Brother printer firmware
+# and producing blank-page loops.
 #
-# Format: source/type destination/type cost filter
-application/vnd.cups-raw application/vnd.cups-raw 0 cups-pre-filter-wake.sh
+# Wake responsibility now lives exclusively in the USB backend wrapper
+# (usb-printer-wake-backend), which is the correct place: it wakes the
+# printer immediately before the real backend opens the USB device.
+#
+# This file is kept empty so that CUPS doesn't error on a missing .convs
+# file if it was previously registered.  No filter rules are active.
