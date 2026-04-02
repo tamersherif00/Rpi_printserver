@@ -45,9 +45,11 @@ configure_cups() {
             sed -i 's/^Browsing Off/Browsing On/' "$CUPS_CONFIG"
         fi
 
-        # Set BrowseLocalProtocols for service discovery
-        if ! grep -q "^BrowseLocalProtocols" "$CUPS_CONFIG"; then
-            echo "BrowseLocalProtocols dnssd" >> "$CUPS_CONFIG"
+        # Set BrowseLocalProtocols — use 'none' because Avahi handles mDNS
+        if grep -q "^BrowseLocalProtocols" "$CUPS_CONFIG"; then
+            sed -i 's/^BrowseLocalProtocols.*/BrowseLocalProtocols none/' "$CUPS_CONFIG"
+        elif ! grep -q "^BrowseLocalProtocols" "$CUPS_CONFIG"; then
+            echo "BrowseLocalProtocols none" >> "$CUPS_CONFIG"
         fi
 
         # Allow remote access to web interface

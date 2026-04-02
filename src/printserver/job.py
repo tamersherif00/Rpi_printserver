@@ -177,11 +177,16 @@ class PrintJob:
         msg = self.state_message.strip() if self.state_message else ""
         reasons = self.state_reasons.strip() if self.state_reasons else ""
         if msg and reasons and msg.lower() != reasons.lower():
-            status_detail = f"{msg} ({reasons})"
+            status_detail = f"{msg} ({self._humanize_reasons(reasons)})"
         elif msg:
             status_detail = msg
         elif reasons:
             status_detail = self._humanize_reasons(reasons)
+
+        # For canceled/aborted jobs with no explanation, provide a default
+        # so the user isn't left wondering why their job disappeared.
+        if not status_detail and self.state in ("canceled", "aborted"):
+            status_detail = "Canceled by system (printer may have been unresponsive)"
 
         return {
             "id": self.id,

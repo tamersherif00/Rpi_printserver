@@ -72,15 +72,20 @@
                             <td title="{{ job.title }}">{{ job.title | truncate(40) }}</td>
                             <td>
                                 {% set has_user = job.user and job.user not in ('anonymous', 'unknown', '') %}
-                                {% if job.origin_host %}
+                                {% if job.origin_host and job.origin_host not in ('localhost', '127.0.0.1', '::1') %}
                                     <i class="bi bi-pc-display-horizontal"></i> {{ job.origin_host }}
+                                    {% if has_user %}
+                                        <br><small class="text-muted">{{ job.user }}</small>
+                                    {% endif %}
+                                {% elif job.origin_host in ('localhost', '127.0.0.1', '::1') %}
+                                    <i class="bi bi-house-door"></i> This server
                                     {% if has_user %}
                                         <br><small class="text-muted">{{ job.user }}</small>
                                     {% endif %}
                                 {% elif has_user %}
                                     {{ job.user }}
                                 {% else %}
-                                    <span class="text-muted">local</span>
+                                    <i class="bi bi-house-door"></i> This server
                                 {% endif %}
                             </td>
                             <td>{{ job.printer_name or '-' }}</td>

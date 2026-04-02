@@ -2,13 +2,12 @@
 # usb-printer-wake-backend - CUPS backend wrapper that wakes USB printers
 #
 # Replaces /usr/lib/cups/backend/usb (the original is moved to usb.real).
-# Before passing the job to the real backend, it sends a USB reset to
-# wake the printer from firmware sleep mode.
+# Wakes the printer from firmware sleep, then runs the real backend.
+# If the real backend fails, retries with another wake cycle — this
+# prevents CUPS from ever marking the printer as "stopped", which would
+# cause Windows to permanently flag it as failed.
 #
-# This is the SOLE wake mechanism.  Previous versions also had a CUPS
-# pre-filter and a systemd path unit that sent additional USB resets;
-# those caused double/triple resets that confused Brother printer firmware
-# into printing blank pages.  They have been removed.
+# This is the SOLE wake mechanism.
 #
 # CUPS backend interface:
 #   Called with 0 args: list available devices (discovery mode)
@@ -21,16 +20,14 @@
 
 REAL_USB_BACKEND="/usr/lib/cups/backend/usb.real"
 WAKE_SCRIPT="/opt/printserver/scripts/wake-printer.sh"
-MAX_WAKE_ATTEMPTS=3
-WAKE_DELAY=3
 
-# Brother printers need 4-5s after USB reset for the print engine to
-# fully initialize.  2s was enough for USB enumeration but NOT for the
-# print engine, causing blank pages when data arrived too early.
-POST_WAKE_SETTLE=4
+# How many times to retry the REAL backend (not just the wake).
+# Each retry does: wake + settle + run usb.real.
+# 3 retries x ~8s each = ~24s max before we give up.
+MAX_BACKEND_RETRIES=3
+BACKEND_RETRY_DELAY=2
 
-# Lock file to prevent concurrent wake attempts from multiple jobs.
-# Overlapping USB resets are the primary cause of blank-page loops.
+# Lock file to prevent concurrent wake attempts.
 WAKE_LOCK="/tmp/usb-printer-wake.lock"
 
 log() {
@@ -41,12 +38,24 @@ error() {
     echo "ERROR: [usb-wake] $*" >&2
 }
 
+# Wake the printer: USB reset + settle time.
+# Uses flock to prevent concurrent resets from multiple jobs.
+do_wake() {
+    (
+        flock -w 30 200 || true
+
+        if [[ -x "$WAKE_SCRIPT" ]]; then
+            "$WAKE_SCRIPT" 2>/dev/null || true
+        fi
+    ) 200>"$WAKE_LOCK"
+}
+
 # Discovery mode: just pass through to real USB backend
 if [[ $# -eq 0 ]]; then
     exec "$REAL_USB_BACKEND"
 fi
 
-# Verify the real backend exists before we do anything
+# Verify the real backend exists
 if [[ ! -x "$REAL_USB_BACKEND" ]]; then
     error "Real USB backend not found at $REAL_USB_BACKEND"
     exit 1
@@ -55,70 +64,52 @@ fi
 job_id="$1"
 log "Job $job_id - waking printer before sending"
 
-
-# Use a lock to serialize wake attempts across concurrent jobs.
-(
-    flock -w 30 200 || {
-        log "Job $job_id - could not acquire wake lock, proceeding anyway"
-    }
-
-    # Check if another job already woke the printer recently.
-    # If so, just wait for the remaining settle time instead of resetting again.
-    need_wake=1
-    if [[ -f "$WAKE_LOCK.done" ]]; then
-        last_wake=$(stat -c %Y "$WAKE_LOCK.done" 2>/dev/null || echo 0)
-        now=$(date +%s)
-        elapsed=$(( now - last_wake ))
-        if [[ $elapsed -lt $POST_WAKE_SETTLE ]]; then
-            remaining=$(( POST_WAKE_SETTLE - elapsed ))
-            log "Job $job_id - printer woken ${elapsed}s ago, waiting ${remaining}s"
-            sleep "$remaining"
-            need_wake=0
-        fi
-    fi
-
-    if [[ $need_wake -eq 1 ]]; then
-        # Send USB reset to wake the printer from firmware sleep
-        wake_success=0
-        for attempt in $(seq 1 $MAX_WAKE_ATTEMPTS); do
-            if [[ -x "$WAKE_SCRIPT" ]]; then
-                # wake-printer.sh handles: USB reset + 4s settle.
-                # Queue re-enabling is handled by the watchdog (10s timer),
-                # NOT by the wake script.
-                "$WAKE_SCRIPT" 2>/dev/null && wake_success=1 && break
-            fi
-
-            # Verify a USB printer device exists in sysfs
-            if grep -r -l "07" /sys/bus/usb/devices/*/bInterfaceClass >/dev/null 2>&1; then
-                log "USB printer present (attempt $attempt)"
-                wake_success=1
-                break
-            fi
-
-            if [[ $attempt -lt $MAX_WAKE_ATTEMPTS ]]; then
-                log "Printer not responding, retry in ${WAKE_DELAY}s ($attempt/$MAX_WAKE_ATTEMPTS)"
-                sleep "$WAKE_DELAY"
-            fi
-        done
-
-        if [[ $wake_success -eq 0 ]]; then
-            error "Job $job_id - USB printer not found after $MAX_WAKE_ATTEMPTS attempts"
-            # Don't exit 1 here - let the real backend try and report the
-            # proper CUPS error code so retry-job can handle it.
-        fi
-
-        # Record when we last woke the printer
-        touch "$WAKE_LOCK.done" 2>/dev/null || true
-    fi
-) 200>"$WAKE_LOCK"
-
-
-# Clean up stale done marker (older than 60s means printer likely asleep again)
-if [[ -f "$WAKE_LOCK.done" ]]; then
-    age=$(( $(date +%s) - $(stat -c %Y "$WAKE_LOCK.done" 2>/dev/null || echo 0) ))
-    [[ $age -gt 60 ]] && rm -f "$WAKE_LOCK.done" 2>/dev/null
+# CUPS sends job data either as a filename ($6) or on stdin.
+# We need to spool stdin to a temp file so we can replay it on retry
+# (stdin can only be read once).
+SPOOL_FILE=""
+if [[ $# -lt 6 || -z "$6" ]]; then
+    SPOOL_FILE=$(mktemp /tmp/cups-spool-XXXXXX)
+    cat > "$SPOOL_FILE"
+    # Replace the missing $6 with our spool file
+    set -- "$1" "$2" "$3" "$4" "$5" "$SPOOL_FILE"
+    log "Job $job_id - spooled stdin to $SPOOL_FILE"
 fi
 
-# Hand off to the real USB backend with all original arguments
-log "Passing job $job_id to real USB backend"
-exec "$REAL_USB_BACKEND" "$@"
+cleanup() {
+    [[ -n "$SPOOL_FILE" && -f "$SPOOL_FILE" ]] && rm -f "$SPOOL_FILE"
+}
+trap cleanup EXIT
+
+# Retry loop: wake + run real backend.  If usb.real fails, wake again
+# and retry.  This prevents CUPS from seeing a backend failure, which
+# would set the printer to "stopped" state and cause Windows to
+# permanently flag it as failed.
+for attempt in $(seq 1 $MAX_BACKEND_RETRIES); do
+    log "Job $job_id - attempt $attempt/$MAX_BACKEND_RETRIES"
+
+    # Wake the printer
+    do_wake
+
+    # Run the real USB backend (NOT exec — we need to check the exit code)
+    "$REAL_USB_BACKEND" "$@"
+    rc=$?
+
+    if [[ $rc -eq 0 ]]; then
+        log "Job $job_id - printed successfully (attempt $attempt)"
+        exit 0
+    fi
+
+    error "Job $job_id - backend failed with exit code $rc (attempt $attempt)"
+
+    if [[ $attempt -lt $MAX_BACKEND_RETRIES ]]; then
+        log "Job $job_id - retrying in ${BACKEND_RETRY_DELAY}s"
+        sleep "$BACKEND_RETRY_DELAY"
+        # Clear the wake lock so the next attempt does a fresh wake
+        rm -f "$WAKE_LOCK.done" 2>/dev/null
+    fi
+done
+
+# All retries exhausted — let CUPS handle it via ErrorPolicy
+error "Job $job_id - all $MAX_BACKEND_RETRIES attempts failed"
+exit 1

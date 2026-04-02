@@ -202,14 +202,15 @@ function updateJobsTable(jobs) {
         let fromCell;
         const hasUser = job.user && !['anonymous', 'unknown', ''].includes(job.user);
         const hasHost = job.origin_host && job.origin_host.length > 0;
-        if (hasHost && hasUser) {
-            fromCell = `<i class="bi bi-pc-display-horizontal"></i> ${escapeHtml(job.origin_host)}<br><small class="text-muted">${escapeHtml(job.user)}</small>`;
-        } else if (hasHost) {
+        const isLocal = ['localhost', '127.0.0.1', '::1'].includes(job.origin_host);
+        if (hasHost && !isLocal) {
             fromCell = `<i class="bi bi-pc-display-horizontal"></i> ${escapeHtml(job.origin_host)}`;
-        } else if (hasUser) {
-            fromCell = escapeHtml(job.user);
+            if (hasUser) fromCell += `<br><small class="text-muted">${escapeHtml(job.user)}</small>`;
+        } else if (isLocal || (!hasHost && !hasUser)) {
+            fromCell = '<i class="bi bi-house-door"></i> This server';
+            if (hasUser) fromCell += `<br><small class="text-muted">${escapeHtml(job.user)}</small>`;
         } else {
-            fromCell = '<span class="text-muted">local</span>';
+            fromCell = escapeHtml(job.user);
         }
 
         // Status cell with state reasons (detailed) or state message (fallback)

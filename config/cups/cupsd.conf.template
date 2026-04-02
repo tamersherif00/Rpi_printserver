@@ -17,7 +17,12 @@ Listen /run/cups/cups.sock
 
 # Enable printer browsing and discovery
 Browsing On
-BrowseLocalProtocols dnssd
+# Disable CUPS's built-in DNS-SD broadcasting.  We use explicit Avahi
+# service files (created by configure-avahi.sh) instead, because:
+#   1. CUPS's dnssd is unreliable with USB printers + PWG Raster driver
+#   2. Both CUPS and Avahi registering the same name causes "Local name
+#      collision" errors that crash the CUPS scheduler
+BrowseLocalProtocols none
 
 # === Performance tuning ===
 # Disable DNS reverse lookups — major cause of slow Windows connections.
@@ -47,17 +52,11 @@ ErrorPolicy retry-job
 
 # How long CUPS waits between retry attempts (seconds).
 # Default is 30s which is too long - Windows polls printer state every
-# ~10s and caches failures.  5s gives the wake backend time to work
-# while keeping the retry loop tight enough that Windows doesn't give up.
-# NOTE: JobRetryInterval is supported in CUPS 2.x on Debian/Raspbian.
-# If your CUPS version ignores it, the watchdog (10s timer) compensates
-# by re-enabling the printer before Windows caches the failure.
+# ~10s and caches failures.  The watchdog (10s timer) compensates by
+# re-enabling the printer before Windows caches the failure.
+# NOTE: These directives are supported in CUPS 2.4+.  Older versions
+# silently ignore them and use the 30s default.
 JobRetryInterval 5
-
-# Maximum number of times CUPS will retry a failed job before giving up.
-# With 5s intervals, 10 retries = 50s total retry window.  The wake
-# backend needs at most ~12s (3 attempts x 4s settle), so 10 retries
-# gives plenty of margin.
 JobRetryLimit 10
 
 # Preserve jobs across restarts and retry cycles.
@@ -99,6 +98,11 @@ MaxJobs 100
 
 # Printer sharing policy
 <Policy default>
+  # Job submission and validation — allow without auth for network printing
+  <Limit Create-Job Print-Job Print-URI Validate-Job>
+    Order deny,allow
+  </Limit>
+
   # Job-related operations
   <Limit Send-Document Send-URI Hold-Job Release-Job Restart-Job Purge-Jobs Set-Job-Attributes Create-Job-Subscription Renew-Subscription Cancel-Subscription Get-Notifications Reprocess-Job Cancel-Current-Job Suspend-Current-Job Resume-Job Cancel-My-Jobs Close-Job CUPS-Move-Job CUPS-Get-Document>
     Require user @OWNER @SYSTEM
@@ -128,9 +132,13 @@ MaxJobs 100
   <Limit All>
     Order deny,allow
   </Limit>
-</Policy>
 
-# External client authentication
+  # Privacy defaults — silence "No JobPrivateAccess defined" warnings
+  JobPrivateAccess default
+  JobPrivateValues default
+  SubscriptionPrivateAccess default
+  SubscriptionPrivateValues default
+</Policy>
 <Policy authenticated>
   # Allow print operations without authentication — Windows IPP clients
   # issue Validate-Job during "Add Printer" and will hang for 30-60s if
@@ -166,4 +174,10 @@ MaxJobs 100
   <Limit All>
     Order deny,allow
   </Limit>
+
+  # Privacy defaults — silence "No JobPrivateAccess defined" warnings
+  JobPrivateAccess default
+  JobPrivateValues default
+  SubscriptionPrivateAccess default
+  SubscriptionPrivateValues default
 </Policy>
