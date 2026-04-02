@@ -2,10 +2,13 @@
 # usb-printer-wake-backend - CUPS backend wrapper that wakes USB printers
 #
 # Replaces /usr/lib/cups/backend/usb (the original is moved to usb.real).
-# Wakes the printer from firmware sleep, then runs the real backend.
-# If the real backend fails, retries with another wake cycle — this
-# prevents CUPS from ever marking the printer as "stopped", which would
-# cause Windows to permanently flag it as failed.
+# Wakes the printer from firmware sleep, then hands off to the real backend
+# via exec (single attempt - CUPS handles retries via ErrorPolicy retry-job).
+#
+# IMPORTANT: We do NOT retry usb.real internally. Previous versions had a
+# retry loop that caused infinite blank page printing because the printer
+# received partial data on failed attempts, then printed empty pages on
+# each subsequent USB reset.
 #
 # This is the SOLE wake mechanism.
 #
@@ -20,34 +23,10 @@
 
 REAL_USB_BACKEND="/usr/lib/cups/backend/usb.real"
 WAKE_SCRIPT="/opt/printserver/scripts/wake-printer.sh"
-
-# How many times to retry the REAL backend (not just the wake).
-# Each retry does: wake + settle + run usb.real.
-# 3 retries x ~8s each = ~24s max before we give up.
-MAX_BACKEND_RETRIES=3
-BACKEND_RETRY_DELAY=2
-
-# Lock file to prevent concurrent wake attempts.
 WAKE_LOCK="/tmp/usb-printer-wake.lock"
 
 log() {
     echo "INFO: [usb-wake] $*" >&2
-}
-
-error() {
-    echo "ERROR: [usb-wake] $*" >&2
-}
-
-# Wake the printer: USB reset + settle time.
-# Uses flock to prevent concurrent resets from multiple jobs.
-do_wake() {
-    (
-        flock -w 30 200 || true
-
-        if [[ -x "$WAKE_SCRIPT" ]]; then
-            "$WAKE_SCRIPT" 2>/dev/null || true
-        fi
-    ) 200>"$WAKE_LOCK"
 }
 
 # Discovery mode: just pass through to real USB backend
@@ -57,59 +36,21 @@ fi
 
 # Verify the real backend exists
 if [[ ! -x "$REAL_USB_BACKEND" ]]; then
-    error "Real USB backend not found at $REAL_USB_BACKEND"
+    log "Real USB backend not found at $REAL_USB_BACKEND"
     exit 1
 fi
 
 job_id="$1"
 log "Job $job_id - waking printer before sending"
 
-# CUPS sends job data either as a filename ($6) or on stdin.
-# We need to spool stdin to a temp file so we can replay it on retry
-# (stdin can only be read once).
-SPOOL_FILE=""
-if [[ $# -lt 6 || -z "$6" ]]; then
-    SPOOL_FILE=$(mktemp /tmp/cups-spool-XXXXXX)
-    cat > "$SPOOL_FILE"
-    # Replace the missing $6 with our spool file
-    set -- "$1" "$2" "$3" "$4" "$5" "$SPOOL_FILE"
-    log "Job $job_id - spooled stdin to $SPOOL_FILE"
-fi
-
-cleanup() {
-    [[ -n "$SPOOL_FILE" && -f "$SPOOL_FILE" ]] && rm -f "$SPOOL_FILE"
-}
-trap cleanup EXIT
-
-# Retry loop: wake + run real backend.  If usb.real fails, wake again
-# and retry.  This prevents CUPS from seeing a backend failure, which
-# would set the printer to "stopped" state and cause Windows to
-# permanently flag it as failed.
-for attempt in $(seq 1 $MAX_BACKEND_RETRIES); do
-    log "Job $job_id - attempt $attempt/$MAX_BACKEND_RETRIES"
-
-    # Wake the printer
-    do_wake
-
-    # Run the real USB backend (NOT exec — we need to check the exit code)
-    "$REAL_USB_BACKEND" "$@"
-    rc=$?
-
-    if [[ $rc -eq 0 ]]; then
-        log "Job $job_id - printed successfully (attempt $attempt)"
-        exit 0
+# Wake the printer with flock to prevent concurrent resets
+(
+    flock -w 30 200 || true
+    if [[ -x "$WAKE_SCRIPT" ]]; then
+        "$WAKE_SCRIPT" 2>/dev/null || true
     fi
+) 200>"$WAKE_LOCK"
 
-    error "Job $job_id - backend failed with exit code $rc (attempt $attempt)"
-
-    if [[ $attempt -lt $MAX_BACKEND_RETRIES ]]; then
-        log "Job $job_id - retrying in ${BACKEND_RETRY_DELAY}s"
-        sleep "$BACKEND_RETRY_DELAY"
-        # Clear the wake lock so the next attempt does a fresh wake
-        rm -f "$WAKE_LOCK.done" 2>/dev/null
-    fi
-done
-
-# All retries exhausted — let CUPS handle it via ErrorPolicy
-error "Job $job_id - all $MAX_BACKEND_RETRIES attempts failed"
-exit 1
+# Hand off to the real USB backend via exec (no retry - CUPS handles that)
+log "Job $job_id - passing to real USB backend"
+exec "$REAL_USB_BACKEND" "$@"
