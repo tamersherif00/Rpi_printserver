@@ -772,7 +772,7 @@ def register_routes(app: Flask) -> None:
         """Get service logs from journald or in-memory ring buffer.
 
         Query params:
-            service: printserver-web, cups, avahi-daemon, or app (default: printserver-web)
+            service: printserver-web, cups, avahi-daemon, all, or app
             lines: Number of lines to return (default: 100, max: 500)
         """
         service = request.args.get("service", "printserver-web")
@@ -780,6 +780,48 @@ def register_routes(app: Flask) -> None:
             lines = min(int(request.args.get("lines", 100)), 500)
         except (ValueError, TypeError):
             lines = 100
+
+        # "all" fetches from all journald services merged chronologically
+        if service == "all":
+            try:
+                # Fetch from all print-related units in one journalctl call
+                cmd = [
+                    "journalctl",
+                    "-u", "printserver-web",
+                    "-u", "cups",
+                    "-u", "avahi-daemon",
+                    "-u", "smbd",
+                    "-u", "wsdd",
+                    "-t", "usb-wake",
+                    "-t", "printer-watchdog",
+                    "-t", "printer-wake",
+                    "-t", "printer-hotplug",
+                    "-n", str(lines),
+                    "--no-pager", "-o", "short-iso",
+                ]
+                result = subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=15,
+                )
+                log_lines = result.stdout.strip().split("\n") if result.stdout.strip() else []
+
+                # Also append CUPS error log (not in journald)
+                try:
+                    cups_err = subprocess.run(
+                        ["tail", "-n", "50", "/var/log/cups/error_log"],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    if cups_err.stdout.strip():
+                        log_lines.append("--- CUPS error_log (last 50 lines) ---")
+                        log_lines.extend(cups_err.stdout.strip().split("\n"))
+                except Exception:
+                    pass
+
+                return jsonify({"service": "all", "entries": log_lines})
+            except Exception as e:
+                return jsonify({
+                    "error": f"Could not read logs: {e}",
+                    "code": "LOG_ERROR",
+                }), 500
 
         if service not in ALLOWED_LOG_SERVICES:
             return jsonify({

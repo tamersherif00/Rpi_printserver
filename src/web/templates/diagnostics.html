@@ -164,10 +164,13 @@
                     <h5 class="mb-0"><i class="bi bi-terminal"></i> Log Viewer</h5>
                     <div class="d-flex gap-2 flex-wrap">
                         <select class="form-select form-select-sm" id="log-service" style="width: auto;" onchange="loadLogs()">
+                            <option value="all">All Services</option>
                             <option value="printserver-web">Web Service</option>
                             <option value="cups">CUPS (journald)</option>
                             <option value="cups-error">CUPS Error Log</option>
                             <option value="avahi-daemon">Avahi</option>
+                            <option value="smbd">Samba</option>
+                            <option value="wsdd">WS-Discovery</option>
                             <option value="app">Application (In-Memory)</option>
                         </select>
                         <select class="form-select form-select-sm" id="log-level" style="width: auto;" onchange="filterLogDisplay()">
@@ -185,6 +188,9 @@
                         </select>
                         <button class="btn btn-sm btn-outline-primary" onclick="loadLogs()">
                             <i class="bi bi-arrow-clockwise"></i>
+                        </button>
+                        <button class="btn btn-sm btn-outline-secondary" onclick="copyLogs()" title="Copy all visible logs to clipboard">
+                            <i class="bi bi-clipboard"></i> Copy
                         </button>
                     </div>
                 </div>
@@ -521,6 +527,29 @@
             } else {
                 el.textContent = `Showing ${shown} of ${total} entries`;
             }
+        }
+    }
+
+    async function copyLogs() {
+        const output = document.getElementById('log-output');
+        if (!output || !output.textContent) {
+            showToast('No logs to copy', 'error');
+            return;
+        }
+        try {
+            await navigator.clipboard.writeText(output.textContent);
+            showToast('Logs copied to clipboard', 'success');
+        } catch (e) {
+            // Fallback for older browsers / non-HTTPS
+            const textarea = document.createElement('textarea');
+            textarea.value = output.textContent;
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textarea);
+            showToast('Logs copied to clipboard', 'success');
         }
     }
 

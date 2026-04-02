@@ -198,24 +198,24 @@ function updateJobsTable(jobs) {
     }
 
     tbody.innerHTML = jobs.map(job => {
-        // Build the "From" cell: show username if meaningful, otherwise IP
+        // Build the "From" cell: always show IP first, username as secondary
         let fromCell;
-        const hasUser = job.user && job.user !== 'anonymous' && job.user !== 'unknown';
+        const hasUser = job.user && !['anonymous', 'unknown', ''].includes(job.user);
         const hasHost = job.origin_host && job.origin_host.length > 0;
-        if (hasUser && hasHost) {
-            fromCell = `${escapeHtml(job.user)}<br><small class="text-muted">${escapeHtml(job.origin_host)}</small>`;
-        } else if (hasUser) {
-            fromCell = escapeHtml(job.user);
+        if (hasHost && hasUser) {
+            fromCell = `<i class="bi bi-pc-display-horizontal"></i> ${escapeHtml(job.origin_host)}<br><small class="text-muted">${escapeHtml(job.user)}</small>`;
         } else if (hasHost) {
             fromCell = `<i class="bi bi-pc-display-horizontal"></i> ${escapeHtml(job.origin_host)}`;
+        } else if (hasUser) {
+            fromCell = escapeHtml(job.user);
         } else {
-            fromCell = '<span class="text-muted">unknown</span>';
+            fromCell = '<span class="text-muted">local</span>';
         }
 
-        // Status cell with optional state message
+        // Status cell with state reasons (detailed) or state message (fallback)
         let statusCell = `<span class="badge ${getStatusBadgeClass(job.state)}">${formatState(job.state)}</span>`;
         if (job.state_message) {
-            statusCell += `<br><small class="text-muted" title="${escapeHtml(job.state_message)}">${escapeHtml(truncate(job.state_message, 30))}</small>`;
+            statusCell += `<br><small class="text-muted" title="${escapeHtml(job.state_reasons || job.state_message)}">${escapeHtml(truncate(job.state_message, 40))}</small>`;
         }
 
         return `

@@ -24,6 +24,7 @@ class PrintJob:
     printer_name: str
     origin_host: str = ""
     processing_at: Optional[datetime] = None
+    state_reasons: str = ""
 
     @classmethod
     def from_cups_data(cls, job_id: int, data: dict[str, Any]) -> "PrintJob":
@@ -110,6 +111,25 @@ class PrintJob:
         if isinstance(state_message, bytes):
             state_message = state_message.decode("utf-8", errors="replace")
 
+        # Get state reasons — CUPS puts detailed failure info here like
+        # "media-empty-error", "toner-low-warning", "printer-stopped".
+        # Can be a string or a list of strings depending on pycups version.
+        raw_reasons = (
+            data.get("job-state-reasons")
+            or data.get("job_state_reasons")
+            or ""
+        )
+        if isinstance(raw_reasons, (list, tuple)):
+            state_reasons = ", ".join(
+                r.decode("utf-8", errors="replace") if isinstance(r, bytes) else str(r)
+                for r in raw_reasons
+                if str(r) != "none"
+            )
+        elif isinstance(raw_reasons, bytes):
+            state_reasons = raw_reasons.decode("utf-8", errors="replace")
+        else:
+            state_reasons = str(raw_reasons) if raw_reasons and str(raw_reasons) != "none" else ""
+
         # Get job state - try multiple attribute names
         job_state = data.get("job-state") or data.get("job_state", 0)
         state = get_job_state_string(job_state)
@@ -140,6 +160,7 @@ class PrintJob:
             completed_at=completed_at,
             processing_at=processing_at,
             printer_name=printer_name,
+            state_reasons=state_reasons,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -148,13 +169,28 @@ class PrintJob:
         Returns:
             Dictionary representation.
         """
+        # Build a combined status detail from state_message and state_reasons.
+        # state_message is CUPS's human text ("Printing page 1"),
+        # state_reasons is the machine-readable detail ("media-empty-error").
+        # Show whichever has useful info, or both if they differ.
+        status_detail = ""
+        msg = self.state_message.strip() if self.state_message else ""
+        reasons = self.state_reasons.strip() if self.state_reasons else ""
+        if msg and reasons and msg.lower() != reasons.lower():
+            status_detail = f"{msg} ({reasons})"
+        elif msg:
+            status_detail = msg
+        elif reasons:
+            status_detail = self._humanize_reasons(reasons)
+
         return {
             "id": self.id,
             "title": self.title,
             "user": self.user,
             "origin_host": self.origin_host,
             "state": self.state,
-            "state_message": self.state_message,
+            "state_message": status_detail,
+            "state_reasons": self.state_reasons,
             "size": self.size,
             "size_display": self._format_size(),
             "pages": self.pages,
@@ -165,6 +201,43 @@ class PrintJob:
             "printer_name": self.printer_name,
             "duration": self._format_duration(),
         }
+
+    @staticmethod
+    def _humanize_reasons(reasons: str) -> str:
+        """Convert CUPS job-state-reasons to human-readable text.
+
+        Args:
+            reasons: Comma-separated CUPS reason strings.
+
+        Returns:
+            Human-readable description.
+        """
+        mapping = {
+            "media-empty-error": "Paper tray empty",
+            "media-empty-warning": "Paper tray low",
+            "media-needed": "Paper needed",
+            "media-jam-error": "Paper jam",
+            "toner-empty-error": "Toner empty",
+            "toner-low-warning": "Toner low",
+            "marker-supply-low-warning": "Ink/toner low",
+            "marker-supply-empty-error": "Ink/toner empty",
+            "door-open-error": "Printer door open",
+            "cover-open-error": "Printer cover open",
+            "printer-stopped": "Printer stopped",
+            "printer-stopped-partly": "Printer partially stopped",
+            "offline-error": "Printer offline",
+            "connecting-to-device": "Connecting to printer",
+            "cups-waiting-for-job-completed": "Waiting for printer response",
+            "job-printing": "Printing",
+            "job-completed-successfully": "Completed",
+            "job-canceled-by-user": "Canceled by user",
+            "job-canceled-at-device": "Canceled at printer",
+            "aborted-by-system": "Aborted by system",
+            "processing-to-stop-point": "Stopping",
+        }
+        parts = [r.strip() for r in reasons.split(",")]
+        humanized = [mapping.get(p, p.replace("-", " ").title()) for p in parts if p]
+        return ", ".join(humanized)
 
     def _format_size(self) -> str:
         """Format file size for display.
