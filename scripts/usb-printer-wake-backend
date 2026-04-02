@@ -1,0 +1,65 @@
+#!/bin/bash
+# usb-printer-wake-backend — CUPS backend wrapper that wakes USB printers
+#
+# Replaces /usr/lib/cups/backend/usb (the original is moved to usb.real).
+# Before passing the job to the real backend, it sends a USB reset to
+# wake the printer from firmware sleep mode.
+#
+# Why: The real USB backend opens the device and blocks on write if the
+# printer is asleep. By the time the watchdog or wake-printer.sh runs,
+# the backend already holds the USB file descriptor — the reset can't
+# interrupt it. This wrapper wakes FIRST, then hands off to the real
+# backend, so the printer is always awake when data transfer begins.
+#
+# CUPS backend interface:
+#   Called with 0 args: list available devices (discovery mode)
+#   Called with 5-6 args: job-id user title copies options [filename]
+#   Env: DEVICE_URI is the printer URI (usb://...)
+#
+# Exit codes (CUPS backend protocol):
+#   0 = success
+#   1 = failure (retry later)
+
+REAL_USB_BACKEND="/usr/lib/cups/backend/usb.real"
+WAKE_SCRIPT="/opt/printserver/scripts/wake-printer.sh"
+MAX_WAKE_ATTEMPTS=3
+WAKE_DELAY=3
+
+log() {
+    echo "INFO: [usb-wake] $*" >&2
+}
+
+# Discovery mode: just pass through to real USB backend
+if [[ $# -eq 0 ]]; then
+    exec "$REAL_USB_BACKEND"
+fi
+
+# Print mode: wake printer, then hand off
+job_id="$1"
+
+log "Job $job_id — waking printer before sending"
+
+# Send USB reset to wake the printer from firmware sleep
+for attempt in $(seq 1 $MAX_WAKE_ATTEMPTS); do
+    if [[ -x "$WAKE_SCRIPT" ]]; then
+        "$WAKE_SCRIPT" 2>/dev/null || true
+    fi
+
+    # Verify a USB printer device exists in sysfs
+    if grep -r -l "07" /sys/bus/usb/devices/*/bInterfaceClass >/dev/null 2>&1; then
+        log "USB printer ready (attempt $attempt)"
+        break
+    fi
+
+    if [[ $attempt -lt $MAX_WAKE_ATTEMPTS ]]; then
+        log "Printer not responding, retry in ${WAKE_DELAY}s ($attempt/$MAX_WAKE_ATTEMPTS)"
+        sleep "$WAKE_DELAY"
+    fi
+done
+
+# Give the printer firmware a moment to fully initialize after wake
+sleep 2
+
+# Hand off to the real USB backend with all original arguments
+log "Passing job to real USB backend"
+exec "$REAL_USB_BACKEND" "$@"

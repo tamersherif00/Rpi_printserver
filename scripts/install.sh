@@ -343,6 +343,20 @@ install_systemd_service() {
     cp "$SCRIPT_DIR/wake-printer.sh" "$INSTALL_DIR/scripts/"
     chmod +x "$INSTALL_DIR/scripts/wake-printer.sh"
 
+    # Install USB backend wrapper that wakes the printer BEFORE the real
+    # USB backend opens the device. This prevents the backend from hanging
+    # indefinitely when the printer is in firmware sleep mode.
+    # The real backend is moved to usb.real; our wrapper takes its place.
+    local usb_backend="/usr/lib/cups/backend/usb"
+    local usb_real="/usr/lib/cups/backend/usb.real"
+    if [[ -f "$usb_backend" && ! -L "$usb_backend" && ! -f "$usb_real" ]]; then
+        mv "$usb_backend" "$usb_real"
+        log_info "Moved original USB backend to usb.real"
+    fi
+    cp "$SCRIPT_DIR/usb-printer-wake-backend" "$usb_backend"
+    chmod 700 "$usb_backend"
+    log_info "USB wake backend wrapper installed"
+
     # Install systemd path unit that watches /var/spool/cups for new jobs
     # and immediately wakes the USB printer. This prevents the "first print
     # after idle fails" problem where the printer's firmware is asleep and

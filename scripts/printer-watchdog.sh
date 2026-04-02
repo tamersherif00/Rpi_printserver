@@ -107,6 +107,58 @@ cleanup_old_jobs() {
     fi
 }
 
+# Detect jobs stuck in "processing" state for too long (>90 seconds).
+# This happens when the USB backend hangs because the printer was asleep
+# when the backend opened the device. Cancel and re-queue the job so it
+# gets retried with a fresh USB connection (via the wake backend).
+recover_stuck_jobs() {
+    local now
+    now=$(date +%s)
+
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        local job_id printer_and_id
+        printer_and_id=$(echo "$line" | awk '{print $1}')
+        job_id=$(echo "$printer_and_id" | cut -d'-' -f2-)
+
+        # Get job state: 5 = processing
+        local state
+        state=$(lpoptions -p "$(echo "$printer_and_id" | cut -d'-' -f1)" 2>/dev/null | grep -oP 'job-state=\K\d+' || echo "")
+
+        # Check how long the job has been processing using lpstat output
+        # If the job is in the active list, it's currently processing
+        local active_job
+        active_job=$(lpstat -o 2>/dev/null | grep "$printer_and_id" || true)
+        if [[ -n "$active_job" ]]; then
+            # Job exists and is active — check if printer state says processing
+            local printer_state
+            printer_state=$(lpstat -p 2>/dev/null | head -1)
+            if echo "$printer_state" | grep -qi "printing\|processing"; then
+                # Use a marker file to track how long we've seen this job processing
+                local marker="/tmp/stuck-job-${job_id}"
+                if [[ -f "$marker" ]]; then
+                    local started
+                    started=$(cat "$marker")
+                    local elapsed=$(( now - started ))
+                    if [[ $elapsed -gt 90 ]]; then
+                        log_info "Job $job_id stuck processing for ${elapsed}s — canceling for retry"
+                        cancel "$job_id" 2>/dev/null || true
+                        rm -f "$marker"
+                        # Wake the printer so the next attempt works
+                        [[ -x "$WAKE_SCRIPT" ]] && "$WAKE_SCRIPT" 2>/dev/null || true
+                    fi
+                else
+                    echo "$now" > "$marker"
+                fi
+            fi
+        else
+            # Job no longer active, clean up marker
+            rm -f "/tmp/stuck-job-${job_id}" 2>/dev/null
+        fi
+    done < <(lpstat -o 2>/dev/null)
+}
+
 wake_sleeping_printer
+recover_stuck_jobs
 recover_printers
 cleanup_old_jobs
