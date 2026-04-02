@@ -192,6 +192,9 @@
                         <button class="btn btn-sm btn-outline-secondary" onclick="copyLogs()" title="Copy all visible logs to clipboard">
                             <i class="bi bi-clipboard"></i> Copy
                         </button>
+                        <button class="btn btn-sm btn-outline-danger" onclick="clearLogs()" title="Clear logs for selected service">
+                            <i class="bi bi-trash"></i> Clear
+                        </button>
                     </div>
                 </div>
                 <small class="text-muted" id="log-count"></small>
@@ -550,6 +553,28 @@
             document.execCommand('copy');
             document.body.removeChild(textarea);
             showToast('Logs copied to clipboard', 'success');
+        }
+    }
+
+    async function clearLogs() {
+        const service = document.getElementById('log-service')?.value || 'printserver-web';
+        const label = service === 'all' ? 'ALL services' : service;
+        if (!confirm(`Clear logs for ${label}? This cannot be undone.`)) return;
+
+        try {
+            const resp = await fetch(`/api/logs/clear?service=${encodeURIComponent(service)}`, {
+                method: 'POST',
+                signal: AbortSignal.timeout(15000),
+            });
+            const data = await resp.json();
+            if (resp.ok && data.success) {
+                showToast(data.message || 'Logs cleared', 'success');
+                await loadLogs();
+            } else {
+                showToast(data.error || 'Failed to clear logs', 'error');
+            }
+        } catch (e) {
+            showToast('Failed to clear logs: ' + e.message, 'error');
         }
     }
 

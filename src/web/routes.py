@@ -877,6 +877,82 @@ def register_routes(app: Flask) -> None:
                 "code": "LOG_ERROR",
             }), 500
 
+    @app.route("/api/logs/clear", methods=["POST"])
+    def api_clear_logs():
+        """Clear logs for a service.
+
+        Query params:
+            service: Service name or 'all' to clear everything.
+        """
+        service = request.args.get("service", "printserver-web")
+
+        cleared = []
+        errors = []
+
+        # Map of services to their log clearing commands
+        journald_units = {
+            "printserver-web": "printserver-web",
+            "cups": "cups",
+            "avahi-daemon": "avahi-daemon",
+            "smbd": "smbd",
+            "wsdd": "wsdd",
+        }
+
+        targets = journald_units if service == "all" else {}
+        if service in journald_units:
+            targets = {service: journald_units[service]}
+
+        # Clear journald logs for targeted units
+        for name, unit in targets.items():
+            try:
+                result = subprocess.run(
+                    ["sudo", "journalctl", "--rotate"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                result = subprocess.run(
+                    ["sudo", "journalctl", "--vacuum-time=1s", "-u", unit],
+                    capture_output=True, text=True, timeout=10,
+                )
+                if result.returncode == 0:
+                    cleared.append(name)
+                else:
+                    errors.append(f"{name}: {result.stderr.strip()}")
+            except Exception as e:
+                errors.append(f"{name}: {e}")
+
+        # Clear CUPS error log
+        if service in ("cups-error", "all"):
+            try:
+                result = subprocess.run(
+                    ["sudo", "truncate", "-s", "0", "/var/log/cups/error_log"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                if result.returncode == 0:
+                    cleared.append("cups-error")
+                else:
+                    errors.append(f"cups-error: {result.stderr.strip()}")
+            except Exception as e:
+                errors.append(f"cups-error: {e}")
+
+        # Clear in-memory app logs
+        if service in ("app", "all"):
+            if hasattr(app, "_log_buffer"):
+                app._log_buffer._buffer.clear()
+                cleared.append("app")
+
+        if errors:
+            return jsonify({
+                "success": len(cleared) > 0,
+                "message": f"Cleared: {', '.join(cleared)}. Errors: {'; '.join(errors)}",
+                "cleared": cleared,
+                "errors": errors,
+            }), 207
+        return jsonify({
+            "success": True,
+            "message": f"Cleared logs for: {', '.join(cleared)}",
+            "cleared": cleared,
+        })
+
     @app.route("/api/printers/<name>/test-page", methods=["POST"])
     def api_print_test_page(name: str):
         """Print a CUPS test page on the specified printer."""

@@ -261,6 +261,8 @@ configure_sudoers() {
 # Allow printserver web service to manage system without password
 ALL ALL=(root) NOPASSWD: /opt/printserver/scripts/set-hostname.sh
 ALL ALL=(root) NOPASSWD: /opt/printserver/scripts/restart-service.sh
+ALL ALL=(root) NOPASSWD: /usr/bin/journalctl
+ALL ALL=(root) NOPASSWD: /usr/bin/truncate -s 0 /var/log/cups/error_log
 EOF
 
     chmod 440 "$SUDOERS_FILE"
