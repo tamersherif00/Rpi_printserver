@@ -105,15 +105,9 @@ configure_ipp() {
     # Ensure IPP is enabled (default in modern CUPS)
     # IPP Everywhere support is built into cups-filters
 
-    # Enable cups-browsed for better discovery
-    if systemctl is-enabled cups-browsed > /dev/null 2>&1; then
-        log_info "cups-browsed is enabled"
-    else
-        systemctl enable cups-browsed 2>/dev/null || true
-    fi
-
-    # Tune cups-browsed for faster printer discovery responses
-    configure_cups_browsed
+    # cups-browsed is intentionally DISABLED — it discovers remote printers
+    # which conflicts with our local USB printer setup and crashes CUPS 2.4.x.
+    # Discovery is handled by our Avahi service files instead.
 }
 
 configure_cups_browsed() {
@@ -252,10 +246,7 @@ restart_cups() {
         log_warn "CUPS scheduler not confirmed ready after $max_attempts attempts — continuing"
     fi
 
-    # Also restart cups-browsed if running (picks up new config)
-    if systemctl is-active cups-browsed > /dev/null 2>&1; then
-        systemctl restart cups-browsed 2>/dev/null || true
-    fi
+    # cups-browsed is disabled — do not restart it
 }
 
 add_user_to_lpadmin() {

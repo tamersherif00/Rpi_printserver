@@ -85,6 +85,9 @@ install_system_packages() {
     # Package names and availability vary across Debian/Raspbian releases
     # (e.g. cups-browsed was split from cups-filters in Debian Trixie+).
     # Install each individually so a missing package doesn't abort the script.
+    # NOTE: cups-browsed is installed but DISABLED — it discovers remote printers
+    # which conflicts with our local USB printer setup (creates duplicate queues,
+    # stale dbus subscriptions that crash CUPS 2.4.x).
     for pkg in cups-filters cups-browsed libcups2-dev; do
         if apt-get install -y "$pkg" 2>/dev/null; then
             log_info "  installed: $pkg"
@@ -385,6 +388,17 @@ install_systemd_service() {
     systemctl enable --now printer-watchdog.timer
     systemctl enable smbd.service nmbd.service 2>/dev/null || true
     systemctl enable wsdd.service 2>/dev/null || true
+
+    # Disable cups-browsed — it discovers REMOTE printers which conflicts
+    # with our local USB setup. It creates stale dbus subscriptions that
+    # crash the CUPS 2.4.x scheduler ("Scheduler shutting down due to
+    # program error"). We only serve a local USB printer, no browsing needed.
+    systemctl stop cups-browsed 2>/dev/null || true
+    systemctl disable cups-browsed 2>/dev/null || true
+    systemctl mask cups-browsed 2>/dev/null || true
+    # Clean stale dbus subscriptions left by cups-browsed
+    rm -f /var/cache/cups/subscriptions.conf* 2>/dev/null || true
+    log_info "cups-browsed disabled (not needed for local USB printer)"
 
     log_info "Systemd services configured"
 }
