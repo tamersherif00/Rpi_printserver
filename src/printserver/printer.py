@@ -31,15 +31,16 @@ class Printer:
         Returns:
             Printer instance.
         """
-        # Try multiple attribute name variations for accepting jobs
-        is_accepting = (
-            data.get("printer-is-accepting-jobs")
-            or data.get("printer_is_accepting_jobs")
-            or False
-        )
-        # Handle both boolean and integer representations (1=True, 0=False)
-        if isinstance(is_accepting, int):
-            is_accepting = bool(is_accepting)
+        # Try multiple attribute name variations for accepting jobs.
+        # pycups returns this as int (0/1) or bool.  We must NOT use
+        # `or` chaining because 0 is falsy in Python and would skip
+        # to the next variant.
+        is_accepting = data.get("printer-is-accepting-jobs")
+        if is_accepting is None:
+            is_accepting = data.get("printer_is_accepting_jobs")
+        if is_accepting is None:
+            is_accepting = False
+        is_accepting = bool(is_accepting)
 
         return cls(
             name=name,
@@ -53,7 +54,9 @@ class Printer:
             ),
             is_accepting_jobs=is_accepting,
             is_shared=bool(
-                data.get("printer-is-shared") or data.get("printer_is_shared", False)
+                data.get("printer-is-shared")
+                if data.get("printer-is-shared") is not None
+                else data.get("printer_is_shared", False)
             ),
             make_model=(
                 data.get("printer-make-and-model")

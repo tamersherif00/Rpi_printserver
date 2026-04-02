@@ -28,48 +28,82 @@ log() {
 }
 
 # Find USB printer device paths from sysfs
-# Returns /dev/bus/usb/BBB/DDD paths for printer-class interfaces
+# Returns /dev/bus/usb/BBB/DDD paths for printer-class interfaces.
+# Searches recursively because interface class files can be at varying
+# depths: /sys/bus/usb/devices/1-1/1-1:1.0/bInterfaceClass
 find_usb_printer_devices() {
     local devices=()
-    for intf in /sys/bus/usb/devices/*/bInterfaceClass; do
+
+    # Method 1: search sysfs recursively for printer-class interfaces
+    while IFS= read -r intf; do
         [[ -f "$intf" ]] || continue
         local class
         class=$(cat "$intf" 2>/dev/null) || continue
-        # Interface class 07 = Printer
         if [[ "$class" == "07" ]]; then
-            local intf_dir
-            intf_dir=$(dirname "$intf")
-            # Go up to the USB device level (parent of the interface)
-            local dev_dir
-            dev_dir=$(dirname "$intf_dir")
-            local busnum devnum
-            busnum=$(cat "$dev_dir/busnum" 2>/dev/null) || continue
-            devnum=$(cat "$dev_dir/devnum" 2>/dev/null) || continue
-            local devpath
-            devpath=$(printf "/dev/bus/usb/%03d/%03d" "$busnum" "$devnum")
-            if [[ -e "$devpath" ]]; then
-                devices+=("$devpath")
-            fi
+            # Walk up to find the USB device directory (has busnum/devnum)
+            local dir
+            dir=$(dirname "$intf")
+            while [[ "$dir" != "/sys" && "$dir" != "/" ]]; do
+                if [[ -f "$dir/busnum" && -f "$dir/devnum" ]]; then
+                    local busnum devnum devpath
+                    busnum=$(cat "$dir/busnum" 2>/dev/null) || break
+                    devnum=$(cat "$dir/devnum" 2>/dev/null) || break
+                    devpath=$(printf "/dev/bus/usb/%03d/%03d" "$busnum" "$devnum")
+                    if [[ -e "$devpath" ]]; then
+                        # Avoid duplicates
+                        local already=0
+                        for d in "${devices[@]}"; do
+                            [[ "$d" == "$devpath" ]] && already=1 && break
+                        done
+                        [[ $already -eq 0 ]] && devices+=("$devpath")
+                    fi
+                    break
+                fi
+                dir=$(dirname "$dir")
+            done
         fi
-    done
+    done < <(find /sys/bus/usb/devices/ -name bInterfaceClass 2>/dev/null)
+
+    # Method 2: fallback using usblp device nodes (kernel printer driver)
+    if [[ ${#devices[@]} -eq 0 ]]; then
+        for usblp in /dev/usb/lp*; do
+            [[ -e "$usblp" ]] && devices+=("$usblp")
+        done
+    fi
+
     printf '%s\n' "${devices[@]}"
 }
 
 # Send USB reset to wake the printer from firmware sleep.
 # Uses Python because there's no standard CLI for USBDEVFS_RESET ioctl.
+# For /dev/bus/usb/ devices: sends USBDEVFS_RESET ioctl.
+# For /dev/usb/lp* devices: opens and closes to trigger kernel wake.
 usb_reset_device() {
     local devpath="$1"
-    python3 -c "
+
+    if [[ "$devpath" == /dev/usb/lp* ]]; then
+        # usblp device: just open/close to trigger kernel activity
+        python3 -c "
+import os
+try:
+    fd = os.open('$devpath', os.O_WRONLY | os.O_NONBLOCK)
+    os.close(fd)
+except Exception:
+    pass
+" 2>/dev/null
+    else
+        # USB bus device: send USBDEVFS_RESET ioctl
+        python3 -c "
 import fcntl, os
 USBDEVFS_RESET = 0x5514
 try:
     fd = os.open('$devpath', os.O_WRONLY)
     fcntl.ioctl(fd, USBDEVFS_RESET, 0)
     os.close(fd)
-except Exception as e:
-    # Non-fatal: printer may already be awake or device node may be stale
+except Exception:
     pass
 " 2>/dev/null
+    fi
 }
 
 wake_all() {

@@ -55,13 +55,15 @@ recover_printers() {
         ((recovered++))
     done < <(lpstat -p 2>/dev/null | grep -iE "disabled|stopped")
 
-    # Also fix printers that are idle but not accepting jobs
+    # Also fix printers that are idle but not accepting jobs.
+    # Run both cupsenable AND cupsaccept — some CUPS versions need both.
     while IFS= read -r printer; do
         [[ -z "$printer" ]] && continue
         local accept_line
         accept_line=$(lpstat -a "$printer" 2>/dev/null)
         if echo "$accept_line" | grep -qi "not accepting"; then
             log_info "Re-enabling job acceptance on: $printer"
+            cupsenable "$printer" 2>/dev/null || true
             cupsaccept "$printer" 2>/dev/null || true
             ((recovered++))
         fi
