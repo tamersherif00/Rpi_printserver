@@ -134,6 +134,17 @@ class PrintJob:
         job_state = data.get("job-state") or data.get("job_state", 0)
         state = get_job_state_string(job_state)
 
+        # Windows IPP clients send Cancel-Job after a job completes (cleanup).
+        # CUPS records this as state=7 (canceled) with reason "job-canceled-by-user"
+        # even though the job printed successfully.  Detect this pattern:
+        # canceled + has completion timestamp + reason is user-cancel or empty.
+        if (state == "canceled"
+                and completed_at is not None
+                and str(raw_reasons).strip() in ("job-canceled-by-user", "none", "")):
+            state = "completed"
+            state_reasons = ""
+            state_message = ""
+
         # Get page counts - try multiple attribute names
         pages = data.get("job-media-sheets") or data.get("job_media_sheets")
         pages_completed = (
@@ -177,17 +188,6 @@ class PrintJob:
         msg = self.state_message.strip() if self.state_message else ""
         reasons = self.state_reasons.strip() if self.state_reasons else ""
 
-        # Windows IPP clients send Cancel-Job after a job completes (cleanup).
-        # CUPS records this as "canceled" with reason "job-canceled-by-user",
-        # even though the job printed fine.  Detect this and show "completed".
-        effective_state = self.state
-        if (self.state == "canceled"
-                and self.completed_at is not None
-                and reasons in ("job-canceled-by-user", "")):
-            effective_state = "completed"
-            status_detail = ""
-            reasons = ""
-
         if msg and reasons and msg.lower() != reasons.lower():
             status_detail = f"{msg} ({self._humanize_reasons(reasons)})"
         elif msg:
@@ -196,8 +196,7 @@ class PrintJob:
             status_detail = self._humanize_reasons(reasons)
 
         # For canceled/aborted jobs with no explanation, provide a default
-        # so the user isn't left wondering why their job disappeared.
-        if not status_detail and effective_state in ("canceled", "aborted"):
+        if not status_detail and self.state in ("canceled", "aborted"):
             status_detail = "Canceled by system (printer may have been unresponsive)"
 
         return {
@@ -205,7 +204,7 @@ class PrintJob:
             "title": self.title,
             "user": self.user,
             "origin_host": self.origin_host,
-            "state": effective_state,
+            "state": self.state,
             "state_message": status_detail,
             "state_reasons": self.state_reasons,
             "size": self.size,
@@ -354,6 +353,35 @@ def get_all_jobs(
     """
     jobs_data = cups_client.get_jobs(which_jobs=which_jobs)
     jobs = [PrintJob.from_cups_data(job_id, data) for job_id, data in jobs_data.items()]
+
+    # pycups getJobs() doesn't return all requested attributes (known bug).
+    # Enrich jobs that are missing user/host/title with per-job attributes.
+    # Only do this for small result sets to avoid hammering CUPS.
+    if len(jobs) <= 50:
+        for job in jobs:
+            if job.user == "unknown" or job.title == "Untitled" or not job.origin_host:
+                try:
+                    full_data = cups_client.get_job_attributes(job.id)
+                    if job.user == "unknown":
+                        user = (
+                            full_data.get("job-originating-user-name")
+                            or full_data.get("job_originating_user_name")
+                        )
+                        if user:
+                            job.user = user.decode("utf-8", errors="replace") if isinstance(user, bytes) else str(user)
+                    if not job.origin_host:
+                        host = (
+                            full_data.get("job-originating-host-name")
+                            or full_data.get("job_originating_host_name")
+                        )
+                        if host:
+                            job.origin_host = host.decode("utf-8", errors="replace") if isinstance(host, bytes) else str(host)
+                    if job.title == "Untitled":
+                        name = full_data.get("job-name") or full_data.get("job_name")
+                        if name:
+                            job.title = name.decode("utf-8", errors="replace") if isinstance(name, bytes) else str(name)
+                except Exception:
+                    pass  # Non-fatal: display with whatever we have
 
     # Filter by printer if specified
     if printer_name:
