@@ -78,6 +78,16 @@ configure_sharing() {
         output=$(cupsctl --share-printers --remote-any --no-remote-admin 2>&1)
         if [[ $? -eq 0 ]]; then
             log_info "Printer sharing enabled"
+
+            # cupsctl --remote-any rewrites Listen directives to "Port 631"
+            # which only listens on localhost on some CUPS versions.
+            # Restore "Listen *:631" to ensure network access works.
+            if grep -q "^Port 631" "$CUPS_CONFIG" && ! grep -q "^Listen \*:631" "$CUPS_CONFIG"; then
+                sed -i 's/^Port 631/Listen *:631/' "$CUPS_CONFIG"
+                log_info "Restored Listen *:631 (cupsctl changed it to Port 631)"
+                systemctl restart cups 2>/dev/null || true
+            fi
+
             return 0
         fi
         log_warn "cupsctl attempt $attempt/$max_attempts failed: $output"

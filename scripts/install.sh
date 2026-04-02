@@ -824,6 +824,15 @@ main() {
     # a CUPS reload that resets printer acceptance state.
     cupsctl --share-printers --remote-any --no-remote-admin 2>/dev/null || true
 
+    # cupsctl --remote-any can rewrite "Listen *:631" to "Port 631".
+    # Restore it so the printer is accessible from the network.
+    if grep -q "^Port 631" /etc/cups/cupsd.conf && ! grep -q "^Listen \*:631" /etc/cups/cupsd.conf; then
+        sed -i 's/^Port 631/Listen *:631/' /etc/cups/cupsd.conf
+        log_info "Restored Listen *:631 after cupsctl"
+        systemctl restart cups 2>/dev/null || true
+        sleep 2
+    fi
+
     # Configure Avahi AFTER printers are detected so service files
     # are generated for any printer already connected at install time.
     configure_avahi

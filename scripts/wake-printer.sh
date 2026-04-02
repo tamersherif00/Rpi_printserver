@@ -19,7 +19,7 @@
 # Called by:
 #   - usb-printer-wake-backend (before each print job)
 
-set -euo pipefail
+set -eo pipefail
 
 PRINTER_NAME="${1:-}"
 
@@ -52,7 +52,7 @@ find_usb_printer_devices() {
                     if [[ -e "$devpath" ]]; then
                         # Avoid duplicates
                         local already=0
-                        for d in "${devices[@]}"; do
+                        for d in "${devices[@]+"${devices[@]}"}"; do
                             [[ "$d" == "$devpath" ]] && already=1 && break
                         done
                         [[ $already -eq 0 ]] && devices+=("$devpath")
@@ -62,7 +62,7 @@ find_usb_printer_devices() {
                 dir=$(dirname "$dir")
             done
         fi
-    done < <(find /sys/bus/usb/devices/ -name bInterfaceClass 2>/dev/null)
+    done < <(find /sys/bus/usb/devices/ /sys/devices/ -name bInterfaceClass 2>/dev/null | sort -u)
 
     # Method 2: fallback using usblp device nodes (kernel printer driver)
     if [[ ${#devices[@]} -eq 0 ]]; then
@@ -71,7 +71,7 @@ find_usb_printer_devices() {
         done
     fi
 
-    printf '%s\n' "${devices[@]}"
+    printf '%s\n' "${devices[@]+"${devices[@]}"}"
 }
 
 # Send USB reset to wake the printer from firmware sleep.
