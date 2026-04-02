@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+
+{% block title %}About - Print Server{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <h1 class="mb-4"><i class="bi bi-info-circle"></i> About</h1>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-8">
+        <div class="card mb-4">
+            <div class="card-body">
+                <h5 class="card-title"><i class="bi bi-printer"></i> Raspberry Pi Print Server</h5>
+                <table class="table table-borderless mb-0">
+                    <tr>
+                        <td class="text-muted" style="width: 140px;">Version</td>
+                        <td><span class="badge bg-primary fs-6">{{ version }}</span></td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">Release Date</td>
+                        <td>{{ release_date }}</td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">Release Notes</td>
+                        <td>{{ release_notes }}</td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-body">
+                <h5 class="card-title"><i class="bi bi-diagram-3"></i> Components</h5>
+                <table class="table table-sm mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Service</th>
+                            <th>Role</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>CUPS</td><td>Print spooler and IPP server</td></tr>
+                        <tr><td>Avahi</td><td>mDNS/DNS-SD for AirPrint discovery</td></tr>
+                        <tr><td>Samba</td><td>SMB printer sharing for Windows</td></tr>
+                        <tr><td>wsdd</td><td>WS-Discovery for Windows auto-detection</td></tr>
+                        <tr><td>Flask/Gunicorn</td><td>Web management interface</td></tr>
+                        <tr><td>USB Wake Backend</td><td>Wakes printer from sleep before each job</td></tr>
+                        <tr><td>Printer Watchdog</td><td>Recovers stopped printers every 10s</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title"><i class="bi bi-windows"></i> Windows Connection</h5>
+                <table class="table table-sm mb-0">
+                    <tr>
+                        <td class="text-muted" style="width: 140px;">IPP (recommended)</td>
+                        <td><code>http://{{ request.host.split(':')[0] }}:631/printers/&lt;PrinterName&gt;</code></td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">SMB</td>
+                        <td><code>\\{{ request.host.split(':')[0] }}</code> &mdash; user: printuser</td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">Web UI</td>
+                        <td><code>http://{{ request.host }}</code></td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

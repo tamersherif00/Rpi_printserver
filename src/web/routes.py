@@ -13,6 +13,7 @@ from flask import Flask, jsonify, render_template, request
 from printserver.cups_client import CupsClient, CupsClientError
 from printserver.printer import get_all_printers, get_printer
 from printserver.job import get_all_jobs, get_job, cancel_job as cancel_print_job
+from printserver.version import VERSION, RELEASE_DATE, RELEASE_NOTES
 from printserver.system_utils import (
     get_hostname,
     set_hostname,
@@ -1137,5 +1138,26 @@ def register_routes(app: Flask) -> None:
         except OSError as exc:
             logger.error("WOL socket error: %s", exc)
             return jsonify({"error": f"Socket error: {exc}"}), 500
+
+    # ── About ─────────────────────────────────────────────────────────────
+
+    @app.route("/about")
+    def about():
+        """Render the About page with version info."""
+        return render_template(
+            "about.html",
+            version=VERSION,
+            release_date=RELEASE_DATE,
+            release_notes=RELEASE_NOTES,
+        )
+
+    @app.route("/api/version")
+    def api_version():
+        """Get version information."""
+        return jsonify({
+            "version": VERSION,
+            "release_date": RELEASE_DATE,
+            "release_notes": RELEASE_NOTES,
+        })
 
     logger.info("Routes registered")
