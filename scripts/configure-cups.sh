@@ -45,11 +45,9 @@ configure_cups() {
             sed -i 's/^Browsing Off/Browsing On/' "$CUPS_CONFIG"
         fi
 
-        # Set BrowseLocalProtocols — use 'none' because Avahi handles mDNS
-        if grep -q "^BrowseLocalProtocols" "$CUPS_CONFIG"; then
-            sed -i 's/^BrowseLocalProtocols.*/BrowseLocalProtocols none/' "$CUPS_CONFIG"
-        elif ! grep -q "^BrowseLocalProtocols" "$CUPS_CONFIG"; then
-            echo "BrowseLocalProtocols none" >> "$CUPS_CONFIG"
+        # Set BrowseLocalProtocols for service discovery
+        if ! grep -q "^BrowseLocalProtocols" "$CUPS_CONFIG"; then
+            echo "BrowseLocalProtocols dnssd" >> "$CUPS_CONFIG"
         fi
 
         # Allow remote access to web interface
@@ -66,37 +64,20 @@ configure_sharing() {
     # cupsctl talks to CUPS over HTTP (localhost:631). Even after lpstat confirms
     # the scheduler is running, the socket can still refuse connections briefly.
     # Retry up to 5 times with a 3-second backoff before giving up (non-fatal).
-    #
-    # Use a single combined command — separate calls can leave sharing in a
-    # half-configured state if one succeeds and the other fails.
-    # --no-remote-admin prevents auth challenges that cause cupsctl to fail
-    # when DefaultAuthType is None (our config for password-free printing).
     local max_attempts=5
     local attempt=1
     while [[ $attempt -le $max_attempts ]]; do
-        local output
-        output=$(cupsctl --share-printers --remote-any --no-remote-admin 2>&1)
-        if [[ $? -eq 0 ]]; then
+        if cupsctl --share-printers 2>/dev/null && cupsctl --remote-any 2>/dev/null; then
             log_info "Printer sharing enabled"
-
-            # cupsctl --remote-any rewrites Listen directives to "Port 631"
-            # which only listens on localhost on some CUPS versions.
-            # Restore "Listen *:631" to ensure network access works.
-            if grep -q "^Port 631" "$CUPS_CONFIG" && ! grep -q "^Listen \*:631" "$CUPS_CONFIG"; then
-                sed -i 's/^Port 631/Listen *:631/' "$CUPS_CONFIG"
-                log_info "Restored Listen *:631 (cupsctl changed it to Port 631)"
-                systemctl restart cups 2>/dev/null || true
-            fi
-
             return 0
         fi
-        log_warn "cupsctl attempt $attempt/$max_attempts failed: $output"
+        log_warn "cupsctl attempt $attempt/$max_attempts failed, retrying in 3s..."
         sleep 3
         ((attempt++))
     done
 
     log_warn "cupsctl could not enable sharing after $max_attempts attempts (non-fatal)."
-    log_warn "Run manually:  cupsctl --share-printers --remote-any --no-remote-admin"
+    log_warn "Run manually once CUPS is stable:  cupsctl --share-printers --remote-any"
 }
 
 configure_ipp() {
@@ -105,9 +86,15 @@ configure_ipp() {
     # Ensure IPP is enabled (default in modern CUPS)
     # IPP Everywhere support is built into cups-filters
 
-    # cups-browsed is intentionally DISABLED — it discovers remote printers
-    # which conflicts with our local USB printer setup and crashes CUPS 2.4.x.
-    # Discovery is handled by our Avahi service files instead.
+    # Enable cups-browsed for better discovery
+    if systemctl is-enabled cups-browsed > /dev/null 2>&1; then
+        log_info "cups-browsed is enabled"
+    else
+        systemctl enable cups-browsed 2>/dev/null || true
+    fi
+
+    # Tune cups-browsed for faster printer discovery responses
+    configure_cups_browsed
 }
 
 configure_cups_browsed() {
@@ -192,15 +179,14 @@ configure_job_preservation() {
 
     # Set job retention settings (conservative for 1GB Pi)
     if [[ -f "$CUPS_CONFIG" ]]; then
-        # Preserve jobs across restarts and retry cycles (4h gives ample
-        # time for printer wake + retry when printer is in firmware sleep)
+        # Preserve jobs for 12 hours after completion
         if ! grep -q "^PreserveJobHistory" "$CUPS_CONFIG"; then
             echo "PreserveJobHistory Yes" >> "$CUPS_CONFIG"
         fi
         if grep -q "^PreserveJobFiles" "$CUPS_CONFIG"; then
-            sed -i 's/^PreserveJobFiles.*/PreserveJobFiles 4h/' "$CUPS_CONFIG"
+            sed -i 's/^PreserveJobFiles.*/PreserveJobFiles 12h/' "$CUPS_CONFIG"
         else
-            echo "PreserveJobFiles 4h" >> "$CUPS_CONFIG"
+            echo "PreserveJobFiles 12h" >> "$CUPS_CONFIG"
         fi
         if grep -q "^MaxJobs" "$CUPS_CONFIG"; then
             sed -i 's/^MaxJobs.*/MaxJobs 100/' "$CUPS_CONFIG"
@@ -246,7 +232,10 @@ restart_cups() {
         log_warn "CUPS scheduler not confirmed ready after $max_attempts attempts — continuing"
     fi
 
-    # cups-browsed is disabled — do not restart it
+    # Also restart cups-browsed if running (picks up new config)
+    if systemctl is-active cups-browsed > /dev/null 2>&1; then
+        systemctl restart cups-browsed 2>/dev/null || true
+    fi
 }
 
 add_user_to_lpadmin() {

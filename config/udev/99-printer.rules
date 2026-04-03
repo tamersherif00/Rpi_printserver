@@ -2,13 +2,13 @@
 # /etc/udev/rules.d/99-printer.rules
 #
 # On connect:  hotplug-printer.sh add
-#   â†’ restarts CUPS, waits for the scheduler, auto-adds the printer queue,
+#   → restarts CUPS, waits for the scheduler, auto-adds the printer queue,
 #     enables job acceptance, marks as shared, then refreshes Avahi (mDNS).
-#   â†’ Windows 10/11, iOS and Android discover the printer automatically once
+#   → Windows 10/11, iOS and Android discover the printer automatically once
 #     Avahi broadcasts the IPP/dnssd record.
 #
 # On disconnect: hotplug-printer.sh remove
-#   â†’ CUPS queue is preserved so queued jobs survive a cable reconnect.
+#   → CUPS queue is preserved so queued jobs survive a cable reconnect.
 #     Avahi is refreshed to remove stale mDNS advertisements.
 
 # Restart CUPS immediately so it can re-enumerate the USB device tree.
@@ -16,21 +16,17 @@
 SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", ACTION=="add", \
     RUN+="/bin/systemctl restart cups.service"
 
-# Disable USB autosuspend for printers â€” prevents kernel-side sleep latency
+# Disable USB autosuspend for printers — prevents sleep-related latency
 SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", ACTION=="add", \
     TEST=="power/autosuspend", ATTR{power/autosuspend}="-1"
 SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", ACTION=="add", \
     TEST=="power/control", ATTR{power/control}="on"
 
 # Run the full hotplug pipeline asynchronously (needs a live CUPS scheduler).
-# Wake is NOT called here â€” it's handled by the USB backend wrapper when
-# the first job is sent.  Calling wake-printer.sh during hotplug caused
-# a USB reset while CUPS was still enumerating the device, leading to
-# race conditions.
 SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", ACTION=="add", \
     RUN+="/bin/bash -c 'sleep 3 && /opt/printserver/scripts/hotplug-printer.sh add >> /var/log/printer-hotplug.log 2>&1 &'"
 
-# USB printer disconnect â€” ID_USB_INTERFACES survives after the class attr is gone.
+# USB printer disconnect — ID_USB_INTERFACES survives after the class attr is gone.
 SUBSYSTEM=="usb", ENV{ID_USB_INTERFACES}=="*:070102:*", ACTION=="remove", \
     RUN+="/bin/bash -c 'sleep 5 && /opt/printserver/scripts/hotplug-printer.sh remove >> /var/log/printer-hotplug.log 2>&1 &'"
 

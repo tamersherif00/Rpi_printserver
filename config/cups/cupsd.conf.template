@@ -17,13 +17,16 @@ Listen /run/cups/cups.sock
 
 # Enable printer browsing and discovery
 Browsing On
-BrowseLocalProtocols none
+BrowseLocalProtocols dnssd
 
 # === Performance tuning ===
 # Disable DNS reverse lookups — major cause of slow Windows connections.
 # Without this, CUPS tries to resolve the client IP to a hostname, which can
 # hang for 30+ seconds when there's no reverse DNS entry.
 HostNameLookups Off
+
+# DNS timeout in seconds — fail fast if name resolution is needed
+DNSSDPort 631
 
 # Keep idle client connections alive longer to avoid reconnect overhead
 # (Windows re-establishes TCP often during driver negotiation)
@@ -80,11 +83,6 @@ MaxJobs 100
 
 # Printer sharing policy
 <Policy default>
-  # Job submission and validation
-  <Limit Create-Job Print-Job Print-URI Validate-Job>
-    Order deny,allow
-  </Limit>
-
   # Job-related operations
   <Limit Send-Document Send-URI Hold-Job Release-Job Restart-Job Purge-Jobs Set-Job-Attributes Create-Job-Subscription Renew-Subscription Cancel-Subscription Get-Notifications Reprocess-Job Cancel-Current-Job Suspend-Current-Job Resume-Job Cancel-My-Jobs Close-Job CUPS-Move-Job CUPS-Get-Document>
     Require user @OWNER @SYSTEM
@@ -114,11 +112,6 @@ MaxJobs 100
   <Limit All>
     Order deny,allow
   </Limit>
-
-  JobPrivateAccess default
-  JobPrivateValues default
-  SubscriptionPrivateAccess default
-  SubscriptionPrivateValues default
 </Policy>
 
 # External client authentication
@@ -157,9 +150,4 @@ MaxJobs 100
   <Limit All>
     Order deny,allow
   </Limit>
-
-  JobPrivateAccess default
-  JobPrivateValues default
-  SubscriptionPrivateAccess default
-  SubscriptionPrivateValues default
 </Policy>

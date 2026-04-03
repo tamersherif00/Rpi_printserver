@@ -13,7 +13,6 @@ from flask import Flask, request
 
 from printserver.config import get_config, setup_logging
 from printserver.cups_client import CupsClient, CupsClientError
-from printserver.version import VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -66,8 +65,8 @@ def _make_memory_watchdog(cache: dict) -> threading.Thread:
         Daemon Thread (not yet started).
     """
     INTERVAL_S = 300        # check every 5 minutes
-    WARN_MB = 120           # soft warning threshold (below systemd MemoryHigh=160M)
-    CRITICAL_MB = 140       # clear cache above this (gives headroom before 160M)
+    WARN_MB = 150           # soft warning threshold
+    CRITICAL_MB = 190       # clear cache above this (systemd kills at 256 MB)
 
     def _rss_mb() -> float:
         # ru_maxrss returns the peak (maximum) RSS on Linux, not the current RSS.
@@ -131,7 +130,6 @@ def create_app(config_override: dict = None) -> Flask:
         CUPS_HOST=server_config.cups.host,
         CUPS_PORT=server_config.cups.port,
         PRINTER_NAME=server_config.printer_name,
-        APP_VERSION=VERSION,
         SEND_FILE_MAX_AGE_DEFAULT=604800,  # 7-day cache for static files
         JSON_SORT_KEYS=False,  # Skip unnecessary JSON key sorting
         TEMPLATES_AUTO_RELOAD=server_config.web.debug,  # Only auto-reload in debug
@@ -156,16 +154,23 @@ def create_app(config_override: dict = None) -> Flask:
     # Readiness flag - set after initial CUPS connection attempt
     app._ready = False
 
-    # One-shot before_request hook to mark the app as ready.
-    # Per-thread CUPS connections are managed by get_cups_client() in routes.py;
-    # creating a separate app-level connection here was dead code that held an
-    # unnecessary CUPS connection.
+    # One-shot before_request hook to attempt initial CUPS connection
     @app.before_request
     def _startup_check():
         if app._ready:
             return None
         app._ready = True
-        logger.info("Application ready — CUPS connections managed per-thread")
+        # Attempt initial CUPS connection (non-blocking for the request)
+        try:
+            client = CupsClient(
+                host=app.config.get("CUPS_HOST", "localhost"),
+                port=app.config.get("CUPS_PORT", 631),
+            )
+            client.connect_with_retry(max_retries=3, base_delay=0.5, max_delay=2.0)
+            app._cups_client = client
+            logger.info("Initial CUPS connection established")
+        except CupsClientError as e:
+            logger.warning(f"Initial CUPS connection failed (will retry on requests): {e}")
         return None
 
     # Cache-Control for static assets (CSS, JS, images)

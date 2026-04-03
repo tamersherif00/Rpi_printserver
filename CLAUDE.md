@@ -18,13 +18,6 @@ tests/
 
 cd src; pytest; ruff check .
 
-## Versioning
-
-**IMPORTANT:** On every commit that changes functionality, increment the version
-in `src/printserver/version.py` — update `VERSION` (semver), `RELEASE_DATE`
-(YYYY-MM-DD), and `RELEASE_NOTES` (one-line summary of what changed).
-Also update `version` in `pyproject.toml` to match.
-
 ## Code Style
 
 Python 3.11 (web interface), Bash (setup scripts), Raspberry Pi OS (Debian-based): Follow standard conventions

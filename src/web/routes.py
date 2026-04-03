@@ -3,7 +3,6 @@
 import logging
 import socket
 import subprocess
-import threading
 import time
 from datetime import datetime
 from typing import Any
@@ -13,7 +12,6 @@ from flask import Flask, jsonify, render_template, request
 from printserver.cups_client import CupsClient, CupsClientError
 from printserver.printer import get_all_printers, get_printer
 from printserver.job import get_all_jobs, get_job, cancel_job as cancel_print_job
-from printserver.version import VERSION, RELEASE_DATE, RELEASE_NOTES
 from printserver.system_utils import (
     get_hostname,
     set_hostname,
@@ -44,9 +42,7 @@ RESTART_SCRIPT = "/opt/printserver/scripts/restart-service.sh"
 # Simple TTL cache for expensive subprocess-heavy functions.
 # Each entry stores (timestamp, value, ttl) so eviction uses each entry's
 # own TTL rather than the current caller's TTL.
-# Hard cap at 50 entries to prevent unbounded memory growth on 1GB Pi.
 _cache: dict[str, tuple[float, Any, float]] = {}
-_CACHE_MAX_ENTRIES = 50
 
 
 def _cached_call(key: str, fn, ttl_seconds: float):
@@ -54,7 +50,8 @@ def _cached_call(key: str, fn, ttl_seconds: float):
 
     Also evicts any fully-expired entries (older than 2× their own TTL) to
     prevent the cache dict from holding stale large dicts indefinitely.
-    Enforces a hard cap of _CACHE_MAX_ENTRIES to bound memory usage.
+    Each entry's TTL is stored alongside its value so that eviction is based
+    on the entry's own TTL, not the current caller's TTL.
     """
     now = time.monotonic()
     # Evict entries older than 2× their own stored TTL
@@ -66,43 +63,30 @@ def _cached_call(key: str, fn, ttl_seconds: float):
         cached_time, cached_value, _ = _cache[key]
         if now - cached_time < ttl_seconds:
             return cached_value
-
     result = fn()
-
-    # Enforce hard cap: if at limit, evict the oldest entry
-    if len(_cache) >= _CACHE_MAX_ENTRIES and key not in _cache:
-        oldest_key = min(_cache, key=lambda k: _cache[k][0])
-        del _cache[oldest_key]
-
     _cache[key] = (now, result, ttl_seconds)
     return result
 
 
-_thread_local = threading.local()
-
-
 def get_cups_client(app: Flask) -> CupsClient:
-    """Get a per-thread CUPS client.
+    """Get a self-healing singleton CUPS client.
 
-    pycups Connection objects are not thread-safe. Using a single shared
-    instance across gunicorn threads causes each thread to see the other's
-    connection as dead (getServer() races), triggering constant reconnects.
-    threading.local() gives each thread its own connection that is only
-    ever touched by that thread.
+    Creates the client once and reuses it. The client's ensure_connected()
+    handles reconnection with retry on each use.
 
     Args:
         app: Flask application.
 
     Returns:
-        Connected CupsClient instance for the current thread.
+        Connected CupsClient instance.
     """
-    if not hasattr(_thread_local, "cups_client") or _thread_local.cups_client is None:
-        _thread_local.cups_client = CupsClient(
+    if not hasattr(app, "_cups_client") or app._cups_client is None:
+        app._cups_client = CupsClient(
             host=app.config.get("CUPS_HOST", "localhost"),
             port=app.config.get("CUPS_PORT", 631),
         )
-    _thread_local.cups_client.ensure_connected()
-    return _thread_local.cups_client
+    app._cups_client.ensure_connected()
+    return app._cups_client
 
 
 def _get_ip_address() -> str:
@@ -497,15 +481,13 @@ def register_routes(app: Flask) -> None:
 
         try:
             client = get_cups_client(app)
-            printers = _cached_call("printers_all", lambda: get_all_printers(client), 15)
+            printers = _cached_call("printers_all", lambda: get_all_printers(client), 30)
             # Use "not-completed" to avoid caching the full CUPS job history
             # (which can be 500+ objects). Status only needs active/pending counts.
-            # Short 5s TTL so job state transitions (processing -> completed)
-            # appear promptly in the dashboard and don't look stuck.
             jobs = _cached_call(
                 "jobs_active",
                 lambda: get_all_jobs(client, which_jobs="not-completed"),
-                5,
+                30,
             )
         except CupsClientError as e:
             cups_error = True
@@ -772,7 +754,7 @@ def register_routes(app: Flask) -> None:
         """Get service logs from journald or in-memory ring buffer.
 
         Query params:
-            service: printserver-web, cups, avahi-daemon, all, or app
+            service: printserver-web, cups, avahi-daemon, or app (default: printserver-web)
             lines: Number of lines to return (default: 100, max: 500)
         """
         service = request.args.get("service", "printserver-web")
@@ -780,48 +762,6 @@ def register_routes(app: Flask) -> None:
             lines = min(int(request.args.get("lines", 100)), 500)
         except (ValueError, TypeError):
             lines = 100
-
-        # "all" fetches from all journald services merged chronologically
-        if service == "all":
-            try:
-                # Fetch from all print-related units in one journalctl call
-                cmd = [
-                    "journalctl",
-                    "-u", "printserver-web",
-                    "-u", "cups",
-                    "-u", "avahi-daemon",
-                    "-u", "smbd",
-                    "-u", "wsdd",
-                    "-t", "usb-wake",
-                    "-t", "printer-watchdog",
-                    "-t", "printer-wake",
-                    "-t", "printer-hotplug",
-                    "-n", str(lines),
-                    "--no-pager", "-o", "short-iso",
-                ]
-                result = subprocess.run(
-                    cmd, capture_output=True, text=True, timeout=15,
-                )
-                log_lines = result.stdout.strip().split("\n") if result.stdout.strip() else []
-
-                # Also append CUPS error log (not in journald)
-                try:
-                    cups_err = subprocess.run(
-                        ["tail", "-n", "50", "/var/log/cups/error_log"],
-                        capture_output=True, text=True, timeout=5,
-                    )
-                    if cups_err.stdout.strip():
-                        log_lines.append("--- CUPS error_log (last 50 lines) ---")
-                        log_lines.extend(cups_err.stdout.strip().split("\n"))
-                except Exception:
-                    pass
-
-                return jsonify({"service": "all", "entries": log_lines})
-            except Exception as e:
-                return jsonify({
-                    "error": f"Could not read logs: {e}",
-                    "code": "LOG_ERROR",
-                }), 500
 
         if service not in ALLOWED_LOG_SERVICES:
             return jsonify({
@@ -876,82 +816,6 @@ def register_routes(app: Flask) -> None:
                 "error": f"Could not read logs: {e}",
                 "code": "LOG_ERROR",
             }), 500
-
-    @app.route("/api/logs/clear", methods=["POST"])
-    def api_clear_logs():
-        """Clear logs for a service.
-
-        Query params:
-            service: Service name or 'all' to clear everything.
-        """
-        service = request.args.get("service", "printserver-web")
-
-        cleared = []
-        errors = []
-
-        # Map of services to their log clearing commands
-        journald_units = {
-            "printserver-web": "printserver-web",
-            "cups": "cups",
-            "avahi-daemon": "avahi-daemon",
-            "smbd": "smbd",
-            "wsdd": "wsdd",
-        }
-
-        targets = journald_units if service == "all" else {}
-        if service in journald_units:
-            targets = {service: journald_units[service]}
-
-        # Clear journald logs for targeted units
-        for name, unit in targets.items():
-            try:
-                result = subprocess.run(
-                    ["sudo", "journalctl", "--rotate"],
-                    capture_output=True, text=True, timeout=10,
-                )
-                result = subprocess.run(
-                    ["sudo", "journalctl", "--vacuum-time=1s", "-u", unit],
-                    capture_output=True, text=True, timeout=10,
-                )
-                if result.returncode == 0:
-                    cleared.append(name)
-                else:
-                    errors.append(f"{name}: {result.stderr.strip()}")
-            except Exception as e:
-                errors.append(f"{name}: {e}")
-
-        # Clear CUPS error log
-        if service in ("cups-error", "all"):
-            try:
-                result = subprocess.run(
-                    ["sudo", "truncate", "-s", "0", "/var/log/cups/error_log"],
-                    capture_output=True, text=True, timeout=5,
-                )
-                if result.returncode == 0:
-                    cleared.append("cups-error")
-                else:
-                    errors.append(f"cups-error: {result.stderr.strip()}")
-            except Exception as e:
-                errors.append(f"cups-error: {e}")
-
-        # Clear in-memory app logs
-        if service in ("app", "all"):
-            if hasattr(app, "_log_buffer"):
-                app._log_buffer._buffer.clear()
-                cleared.append("app")
-
-        if errors:
-            return jsonify({
-                "success": len(cleared) > 0,
-                "message": f"Cleared: {', '.join(cleared)}. Errors: {'; '.join(errors)}",
-                "cleared": cleared,
-                "errors": errors,
-            }), 207
-        return jsonify({
-            "success": True,
-            "message": f"Cleared logs for: {', '.join(cleared)}",
-            "cleared": cleared,
-        })
 
     @app.route("/api/printers/<name>/test-page", methods=["POST"])
     def api_print_test_page(name: str):
@@ -1256,26 +1120,5 @@ def register_routes(app: Flask) -> None:
         except OSError as exc:
             logger.error("WOL socket error: %s", exc)
             return jsonify({"error": f"Socket error: {exc}"}), 500
-
-    # ── About ─────────────────────────────────────────────────────────────
-
-    @app.route("/about")
-    def about():
-        """Render the About page with version info."""
-        return render_template(
-            "about.html",
-            version=VERSION,
-            release_date=RELEASE_DATE,
-            release_notes=RELEASE_NOTES,
-        )
-
-    @app.route("/api/version")
-    def api_version():
-        """Get version information."""
-        return jsonify({
-            "version": VERSION,
-            "release_date": RELEASE_DATE,
-            "release_notes": RELEASE_NOTES,
-        })
 
     logger.info("Routes registered")

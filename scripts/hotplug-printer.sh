@@ -7,9 +7,7 @@
 # On connect  (add):
 #   1. Wait for CUPS scheduler to accept connections
 #   2. Find the USB printer URI via lpinfo -v
-#   3. Add a CUPS queue (tries model-specific brlaser first for Brother
-#      printers, falls back to generic PWG Raster; NEVER -m everywhere
-#      which requires an IPP network connection and fails with USB URIs)
+#   3. Add a CUPS queue with driver "everywhere" (IPP Everywhere / driverless)
 #   4. Enable the queue, start accepting jobs, mark as shared
 #   5. Trigger configure-avahi.sh so Avahi advertises the printer via mDNS
 #      → Windows 10/11, iOS, Android will auto-discover it
@@ -66,56 +64,26 @@ add_printer() {
 
     if ! lpstat -p "$name" 2>/dev/null | grep -q "$name"; then
         log "Adding CUPS queue '$name' for $uri ..."
-
-        # Driver selection for USB printers:
-        # 1. Try the printer-specific brlaser PPD (best print quality for Brother)
-        # 2. Fall back to generic PWG Raster (works with most USB printers)
-        # 3. Last resort: raw queue
-        #
-        # Do NOT use -m everywhere — it requires an IPP network connection
-        # and fails with USB URIs on newer CUPS.
-        #
-        # Sleep recovery is handled separately by retry-job error policy,
-        # wake-printer.sh (USB reset), and the printer-watchdog timer.
-        local driver=""
-        # Check if a brlaser driver exists for this specific printer model
-        local brlaser_ppd
-        brlaser_ppd=$(lpinfo -m 2>/dev/null | grep -i "brlaser" | grep -i "$(echo "$name" | tr '_' ' ' | awk '{print $NF}')" | head -1 | awk '{print $1}')
-        if [[ -n "$brlaser_ppd" ]]; then
-            driver="$brlaser_ppd"
-            log "Found model-specific brlaser driver: $driver"
-        fi
-
-        if [[ -n "$driver" ]] && lpadmin -p "$name" -E -v "$uri" -m "$driver" 2>/dev/null; then
-            lpadmin -d "$name" 2>/dev/null || true
-            log "Queue '$name' added (driver: $driver)"
-        elif lpadmin -p "$name" -E -v "$uri" -m "drv:///cupsfilters.drv/pwgrast.ppd" 2>/dev/null; then
-            lpadmin -d "$name" 2>/dev/null || true
-            log "Queue '$name' added (PWG Raster / generic)"
+        if lpadmin -p "$name" -E -v "$uri" -m everywhere 2>/dev/null; then
+            lpadmin -d "$name" 2>/dev/null || true   # set as default
+            log "Queue '$name' added (driverless/IPP Everywhere)"
         else
-            log "lpadmin failed — add the printer via the CUPS web UI"
+            # Driver-less setup failed — printer may need a specific PPD.
+            # Leave setup to the user via the CUPS web UI; still continue to
+            # enable + share any queue that already exists under a different name.
+            log "lpadmin -m everywhere failed — add the printer via the CUPS web UI"
         fi
     else
         log "Queue '$name' already exists — skipping lpadmin"
     fi
 
-    # Enable sharing for every real USB/IPP queue.
-    # Skip ghost queues pointing to /dev/null (created by failed hotplug
-    # attempts) — enabling them causes Windows to see phantom printers.
+    # Enable sharing for every configured queue (handles pre-existing queues too)
     while IFS= read -r printer; do
         [[ -z "$printer" ]] && continue
-        local dev_uri
-        dev_uri=$(lpstat -v "$printer" 2>/dev/null | awk '{print $NF}')
-        if [[ "$dev_uri" == *"/dev/null"* ]]; then
-            log "Removing ghost queue '$printer' (uri=$dev_uri)"
-            lpadmin -x "$printer" 2>/dev/null || true
-            continue
-        fi
         cupsenable  "$printer" 2>/dev/null || true
         cupsaccept  "$printer" 2>/dev/null || true
         lpadmin -p  "$printer" -o printer-is-shared=true 2>/dev/null || true
-        lpadmin -p  "$printer" -o printer-error-policy=retry-job 2>/dev/null || true
-        log "Printer '$printer': enabled, accepting jobs, shared (uri=$dev_uri)"
+        log "Printer '$printer': enabled, accepting jobs, shared"
     done < <(lpstat -p 2>/dev/null | awk '{print $2}')
 }
 

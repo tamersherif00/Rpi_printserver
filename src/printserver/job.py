@@ -22,9 +22,6 @@ class PrintJob:
     created_at: Optional[datetime]
     completed_at: Optional[datetime]
     printer_name: str
-    origin_host: str = ""
-    processing_at: Optional[datetime] = None
-    state_reasons: str = ""
 
     @classmethod
     def from_cups_data(cls, job_id: int, data: dict[str, Any]) -> "PrintJob":
@@ -40,36 +37,22 @@ class PrintJob:
         # Parse timestamps - try multiple attribute names
         created_at = None
         completed_at = None
-        processing_at = None
 
-        # Try different timestamp attribute names.
-        # CUPS returns 0 (Unix epoch) when a timestamp isn't set yet
-        # (e.g. time-at-completed for a pending job), so treat 0 as missing.
+        # Try different timestamp attribute names
         for ts_attr in ["time-at-creation", "time_at_creation"]:
-            ts_val = data.get(ts_attr)
-            if ts_val:
+            if ts_attr in data:
                 try:
-                    created_at = datetime.fromtimestamp(ts_val)
+                    created_at = datetime.fromtimestamp(data[ts_attr])
                     break
-                except (ValueError, TypeError, OSError):
+                except (ValueError, TypeError):
                     pass
 
         for ts_attr in ["time-at-completed", "time_at_completed"]:
-            ts_val = data.get(ts_attr)
-            if ts_val:
+            if ts_attr in data:
                 try:
-                    completed_at = datetime.fromtimestamp(ts_val)
+                    completed_at = datetime.fromtimestamp(data[ts_attr])
                     break
-                except (ValueError, TypeError, OSError):
-                    pass
-
-        for ts_attr in ["time-at-processing", "time_at_processing"]:
-            ts_val = data.get(ts_attr)
-            if ts_val:
-                try:
-                    processing_at = datetime.fromtimestamp(ts_val)
-                    break
-                except (ValueError, TypeError, OSError):
+                except (ValueError, TypeError):
                     pass
 
         # Extract printer name from URI - try multiple attribute names
@@ -92,18 +75,6 @@ class PrintJob:
         if isinstance(user, bytes):
             user = user.decode("utf-8", errors="replace")
 
-        # Get originating host (client IP address).
-        # Since DefaultAuthType=None, the username is often "anonymous" or
-        # a generic Windows username.  The host IP is the reliable way to
-        # identify which device sent the job.
-        origin_host = (
-            data.get("job-originating-host-name")
-            or data.get("job_originating_host_name")
-            or ""
-        )
-        if isinstance(origin_host, bytes):
-            origin_host = origin_host.decode("utf-8", errors="replace")
-
         # Get state message
         state_message = (
             data.get("job-state-message") or data.get("job_state_message", "")
@@ -111,39 +82,9 @@ class PrintJob:
         if isinstance(state_message, bytes):
             state_message = state_message.decode("utf-8", errors="replace")
 
-        # Get state reasons — CUPS puts detailed failure info here like
-        # "media-empty-error", "toner-low-warning", "printer-stopped".
-        # Can be a string or a list of strings depending on pycups version.
-        raw_reasons = (
-            data.get("job-state-reasons")
-            or data.get("job_state_reasons")
-            or ""
-        )
-        if isinstance(raw_reasons, (list, tuple)):
-            state_reasons = ", ".join(
-                r.decode("utf-8", errors="replace") if isinstance(r, bytes) else str(r)
-                for r in raw_reasons
-                if str(r) != "none"
-            )
-        elif isinstance(raw_reasons, bytes):
-            state_reasons = raw_reasons.decode("utf-8", errors="replace")
-        else:
-            state_reasons = str(raw_reasons) if raw_reasons and str(raw_reasons) != "none" else ""
-
         # Get job state - try multiple attribute names
         job_state = data.get("job-state") or data.get("job_state", 0)
         state = get_job_state_string(job_state)
-
-        # Windows IPP clients send Cancel-Job after a job completes (cleanup).
-        # CUPS records this as state=7 (canceled) with reason "job-canceled-by-user"
-        # even though the job printed successfully.  Detect this pattern:
-        # canceled + has completion timestamp + reason is user-cancel or empty.
-        if (state == "canceled"
-                and completed_at is not None
-                and str(raw_reasons).strip() in ("job-canceled-by-user", "none", "")):
-            state = "completed"
-            state_reasons = ""
-            state_message = ""
 
         # Get page counts - try multiple attribute names
         pages = data.get("job-media-sheets") or data.get("job_media_sheets")
@@ -161,7 +102,6 @@ class PrintJob:
             id=job_id,
             title=title,
             user=user,
-            origin_host=origin_host,
             state=state,
             state_message=state_message,
             size=size,
@@ -169,9 +109,7 @@ class PrintJob:
             pages_completed=pages_completed,
             created_at=created_at,
             completed_at=completed_at,
-            processing_at=processing_at,
             printer_name=printer_name,
-            state_reasons=state_reasons,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -180,121 +118,19 @@ class PrintJob:
         Returns:
             Dictionary representation.
         """
-        # Build a combined status detail from state_message and state_reasons.
-        # state_message is CUPS's human text ("Printing page 1"),
-        # state_reasons is the machine-readable detail ("media-empty-error").
-        # Show whichever has useful info, or both if they differ.
-        status_detail = ""
-        msg = self.state_message.strip() if self.state_message else ""
-        reasons = self.state_reasons.strip() if self.state_reasons else ""
-
-        if msg and reasons and msg.lower() != reasons.lower():
-            status_detail = f"{msg} ({self._humanize_reasons(reasons)})"
-        elif msg:
-            status_detail = msg
-        elif reasons:
-            status_detail = self._humanize_reasons(reasons)
-
-        # For canceled/aborted jobs with no explanation, provide a default
-        if not status_detail and self.state in ("canceled", "aborted"):
-            status_detail = "Canceled by system (printer may have been unresponsive)"
-
         return {
             "id": self.id,
             "title": self.title,
             "user": self.user,
-            "origin_host": self.origin_host,
             "state": self.state,
-            "state_message": status_detail,
-            "state_reasons": self.state_reasons,
+            "state_message": self.state_message,
             "size": self.size,
-            "size_display": self._format_size(),
             "pages": self.pages,
             "pages_completed": self.pages_completed,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
-            "processing_at": self.processing_at.isoformat() if self.processing_at else None,
             "printer_name": self.printer_name,
-            "duration": self._format_duration(),
         }
-
-    @staticmethod
-    def _humanize_reasons(reasons: str) -> str:
-        """Convert CUPS job-state-reasons to human-readable text.
-
-        Args:
-            reasons: Comma-separated CUPS reason strings.
-
-        Returns:
-            Human-readable description.
-        """
-        mapping = {
-            "media-empty-error": "Paper tray empty",
-            "media-empty-warning": "Paper tray low",
-            "media-needed": "Paper needed",
-            "media-jam-error": "Paper jam",
-            "toner-empty-error": "Toner empty",
-            "toner-low-warning": "Toner low",
-            "marker-supply-low-warning": "Ink/toner low",
-            "marker-supply-empty-error": "Ink/toner empty",
-            "door-open-error": "Printer door open",
-            "cover-open-error": "Printer cover open",
-            "printer-stopped": "Printer stopped",
-            "printer-stopped-partly": "Printer partially stopped",
-            "offline-error": "Printer offline",
-            "connecting-to-device": "Connecting to printer",
-            "cups-waiting-for-job-completed": "Waiting for printer response",
-            "job-printing": "Printing",
-            "job-completed-successfully": "Completed",
-            "job-canceled-by-user": "Canceled by user",
-            "job-canceled-at-device": "Canceled at printer",
-            "aborted-by-system": "Aborted by system",
-            "processing-to-stop-point": "Stopping",
-        }
-        parts = [r.strip() for r in reasons.split(",")]
-        humanized = [mapping.get(p, p.replace("-", " ").title()) for p in parts if p]
-        return ", ".join(humanized)
-
-    def _format_size(self) -> str:
-        """Format file size for display.
-
-        Returns:
-            Human-readable size string.
-        """
-        if self.size <= 0:
-            return "-"
-        if self.size < 1024:
-            return f"{self.size} B"
-        if self.size < 1024 * 1024:
-            return f"{self.size / 1024:.1f} KB"
-        return f"{self.size / (1024 * 1024):.1f} MB"
-
-    def _format_duration(self) -> Optional[str]:
-        """Calculate how long the job took (submitted to completed).
-
-        Returns:
-            Human-readable duration string, or None if not applicable.
-        """
-        if not self.created_at:
-            return None
-        end = self.completed_at or (
-            datetime.now() if self.is_active else None
-        )
-        if not end:
-            return None
-        delta = end - self.created_at
-        secs = int(delta.total_seconds())
-        if secs < 0:
-            return None
-        if secs < 60:
-            return f"{secs}s"
-        mins = secs // 60
-        secs = secs % 60
-        if mins < 60:
-            return f"{mins}m {secs}s"
-        hours = mins // 60
-        mins = mins % 60
-        return f"{hours}h {mins}m"
 
     @property
     def is_pending(self) -> bool:
@@ -353,35 +189,6 @@ def get_all_jobs(
     """
     jobs_data = cups_client.get_jobs(which_jobs=which_jobs)
     jobs = [PrintJob.from_cups_data(job_id, data) for job_id, data in jobs_data.items()]
-
-    # pycups getJobs() doesn't return all requested attributes (known bug).
-    # Enrich jobs that are missing user/host/title with per-job attributes.
-    # Only do this for small result sets to avoid hammering CUPS.
-    if len(jobs) <= 50:
-        for job in jobs:
-            if job.user == "unknown" or job.title == "Untitled" or not job.origin_host:
-                try:
-                    full_data = cups_client.get_job_attributes(job.id)
-                    if job.user == "unknown":
-                        user = (
-                            full_data.get("job-originating-user-name")
-                            or full_data.get("job_originating_user_name")
-                        )
-                        if user:
-                            job.user = user.decode("utf-8", errors="replace") if isinstance(user, bytes) else str(user)
-                    if not job.origin_host:
-                        host = (
-                            full_data.get("job-originating-host-name")
-                            or full_data.get("job_originating_host_name")
-                        )
-                        if host:
-                            job.origin_host = host.decode("utf-8", errors="replace") if isinstance(host, bytes) else str(host)
-                    if job.title == "Untitled":
-                        name = full_data.get("job-name") or full_data.get("job_name")
-                        if name:
-                            job.title = name.decode("utf-8", errors="replace") if isinstance(name, bytes) else str(name)
-                except Exception:
-                    pass  # Non-fatal: display with whatever we have
 
     # Filter by printer if specified
     if printer_name:

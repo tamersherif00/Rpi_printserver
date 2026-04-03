@@ -66,7 +66,7 @@ install_system_packages() {
     log_info "Updating package lists..."
     apt-get update
 
-    # â”€â”€ Mandatory packages â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Mandatory packages ────────────────────────────────────────────────────
     # These are required for the print server to function; exit on failure.
     log_info "Installing required packages..."
     apt-get install -y \
@@ -81,26 +81,23 @@ install_system_packages() {
         samba \
         wireless-tools
 
-    # â”€â”€ Optional system packages â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Optional system packages ──────────────────────────────────────────────
     # Package names and availability vary across Debian/Raspbian releases
     # (e.g. cups-browsed was split from cups-filters in Debian Trixie+).
     # Install each individually so a missing package doesn't abort the script.
-    # NOTE: cups-browsed is installed but DISABLED — it discovers remote printers
-    # which conflicts with our local USB printer setup (creates duplicate queues,
-    # stale dbus subscriptions that crash CUPS 2.4.x).
     for pkg in cups-filters cups-browsed libcups2-dev; do
         if apt-get install -y "$pkg" 2>/dev/null; then
             log_info "  installed: $pkg"
         else
-            log_warn "$pkg not available in current repos â€” skipping (non-fatal)"
+            log_warn "$pkg not available in current repos — skipping (non-fatal)"
         fi
     done
 
-    # â”€â”€ wsdd: Windows 10/11 auto-discovery via WS-Discovery â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── wsdd: Windows 10/11 auto-discovery via WS-Discovery ──────────────────
     # Strategy:
     #   1. Try apt  (available on Bullseye/Bookworm; removed from Trixie+).
     #   2. Download the standalone Python script from the upstream GitHub repo.
-    #      wsdd is NOT published to PyPI â€” pip install wsdd will always fail.
+    #      wsdd is NOT published to PyPI — pip install wsdd will always fail.
     #   3. Warn and provide manual-add instructions if both methods fail.
     if apt-get install -y wsdd 2>/dev/null; then
         log_info "wsdd installed from apt"
@@ -123,7 +120,7 @@ install_system_packages() {
             fi
         fi
     else
-        log_info "apt wsdd unavailable â€” downloading from GitHub (christgau/wsdd)..."
+        log_info "apt wsdd unavailable — downloading from GitHub (christgau/wsdd)..."
         WSDD_BIN="/usr/local/bin/wsdd"
         if wget -q -O "$WSDD_BIN" \
                "https://raw.githubusercontent.com/christgau/wsdd/master/src/wsdd.py" \
@@ -161,13 +158,13 @@ WSDD_EOF
         fi
     fi
 
-    # â”€â”€ Optional printer drivers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Optional printer drivers ──────────────────────────────────────────────
     log_info "Installing printer drivers (where available)..."
     for pkg in printer-driver-brlaser printer-driver-cups-pdf printer-driver-gutenprint; do
         if apt-cache show "$pkg" > /dev/null 2>&1; then
             apt-get install -y "$pkg" && log_info "  installed: $pkg"
         else
-            log_warn "  $pkg not available in current repos â€” skipping"
+            log_warn "  $pkg not available in current repos — skipping"
         fi
     done
 
@@ -264,8 +261,6 @@ configure_sudoers() {
 # Allow printserver web service to manage system without password
 ALL ALL=(root) NOPASSWD: /opt/printserver/scripts/set-hostname.sh
 ALL ALL=(root) NOPASSWD: /opt/printserver/scripts/restart-service.sh
-ALL ALL=(root) NOPASSWD: /usr/bin/journalctl
-ALL ALL=(root) NOPASSWD: /usr/bin/truncate -s 0 /var/log/cups/error_log
 EOF
 
     chmod 440 "$SUDOERS_FILE"
@@ -336,35 +331,12 @@ install_systemd_service() {
 
     cp "$PROJECT_DIR/config/systemd/printserver-web.service" /etc/systemd/system/
 
-    # Install printer watchdog timer - auto-recovers printers stuck in
+    # Install printer watchdog timer — auto-recovers printers stuck in
     # "stopped" or "failed" state (e.g. after USB sleep or transient error)
     cp "$PROJECT_DIR/config/systemd/printer-watchdog.service" /etc/systemd/system/
     cp "$PROJECT_DIR/config/systemd/printer-watchdog.timer" /etc/systemd/system/
     cp "$SCRIPT_DIR/printer-watchdog.sh" "$INSTALL_DIR/scripts/"
     chmod +x "$INSTALL_DIR/scripts/printer-watchdog.sh"
-
-    # === RESTORE original USB backend ===
-    # Previous versions replaced /usr/lib/cups/backend/usb with a wake wrapper
-    # that sent USB resets before each job. This caused Brother printers to
-    # print infinite blank pages. The original CUPS USB backend handles
-    # printer communication natively. ErrorPolicy=retry-job + the watchdog
-    # handle recovery without any USB reset hacks.
-    local usb_backend="/usr/lib/cups/backend/usb"
-    local usb_real="/usr/lib/cups/backend/usb.real"
-    if [[ -f "$usb_real" ]]; then
-        mv -f "$usb_real" "$usb_backend"
-        chmod 700 "$usb_backend"
-        log_info "Restored original CUPS USB backend (removed wake wrapper)"
-    fi
-
-    # Disable all wake-related units (USB resets cause blank page loops)
-    systemctl disable --now printer-wake.path 2>/dev/null || true
-    systemctl disable --now printer-wake.service 2>/dev/null || true
-
-    # Remove CUPS pre-filter and convs registration if present
-    local convs_file="/usr/share/cups/mime/printserver-wake.convs"
-    [[ -f "$convs_file" ]] && echo "# DISABLED" > "$convs_file"
-    rm -f /usr/lib/cups/filter/cups-pre-filter-wake.sh 2>/dev/null || true
 
     systemctl daemon-reload
     systemctl enable printserver-web.service
@@ -373,21 +345,6 @@ install_systemd_service() {
     systemctl enable --now printer-watchdog.timer
     systemctl enable smbd.service nmbd.service 2>/dev/null || true
     systemctl enable wsdd.service 2>/dev/null || true
-
-    # Disable cups-browsed - it creates stale dbus subscriptions that
-    # crash the CUPS 2.4.x scheduler on headless Pi
-    systemctl stop cups-browsed 2>/dev/null || true
-    systemctl disable cups-browsed 2>/dev/null || true
-    systemctl mask cups-browsed 2>/dev/null || true
-    rm -f /var/cache/cups/subscriptions.conf* 2>/dev/null || true
-    log_info "cups-browsed disabled (not needed for local USB printer)"
-
-    # Disable CUPS dbus notifier - spawns dozens of processes on headless Pi
-    local dbus_notifier="/usr/lib/cups/notifier/dbus"
-    if [[ -x "$dbus_notifier" ]]; then
-        chmod 000 "$dbus_notifier"
-        log_info "CUPS dbus notifier disabled (not needed on headless Pi)"
-    fi
 
     log_info "Systemd services configured"
 }
@@ -493,7 +450,7 @@ NMEOF
     # Method 2: udev rule (works even without NetworkManager)
     local udev_wifi="/etc/udev/rules.d/70-wifi-powersave.rules"
     cat > "$udev_wifi" << 'UDEVEOF'
-# Disable WiFi power-save on interface up â€” ensures fast mDNS responses
+# Disable WiFi power-save on interface up — ensures fast mDNS responses
 ACTION=="add", SUBSYSTEM=="net", KERNEL=="wlan*", RUN+="/usr/sbin/iw dev %k set power_save off"
 UDEVEOF
     log_info "Created udev rule for WiFi power-save"
@@ -512,7 +469,7 @@ configure_usb_power() {
     # doesn't go into a low-power state between print jobs.
     local udev_usb="/etc/udev/rules.d/71-usb-printer-power.rules"
     cat > "$udev_usb" << 'USBEOF'
-# Keep USB printers awake â€” disable kernel autosuspend for printer class (07)
+# Keep USB printers awake — disable kernel autosuspend for printer class (07)
 ACTION=="add", SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", TEST=="power/autosuspend", ATTR{power/autosuspend}="-1"
 ACTION=="add", SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", TEST=="power/control", ATTR{power/control}="on"
 USBEOF
@@ -572,7 +529,7 @@ start_services() {
     systemctl start wsdd 2>/dev/null || true
     systemctl start printserver-web
 
-    # Verify with health check (retry a few times â€” gunicorn needs time to bind)
+    # Verify with health check (retry a few times — gunicorn needs time to bind)
     local attempt=1
     while [[ $attempt -le 5 ]]; do
         if curl -s -o /dev/null -w "%{http_code}" http://localhost:5000/health 2>/dev/null | grep -q "200"; then
@@ -627,7 +584,7 @@ restart_services() {
         log_warn "  systemctl status cups avahi-daemon smbd printserver-web"
     fi
 
-    # Verify web interface health (retry a few times â€” gunicorn needs time to bind)
+    # Verify web interface health (retry a few times — gunicorn needs time to bind)
     local attempt=1
     while [[ $attempt -le 5 ]]; do
         if curl -s -o /dev/null -w "%{http_code}" http://localhost:5000/health 2>/dev/null | grep -q "200"; then
@@ -656,31 +613,14 @@ detect_printer() {
             log_info "Found USB printer: $PRINTER_URI (attempt $attempt)"
 
             # Extract printer name from URI
-            # e.g. usb://Brother/HL-L2340D%20series?serial=... â†’ Brother_HL-L2340D_series
-            PRINTER_NAME=$(echo "$PRINTER_URI" \
-                | sed 's|usb://||' \
-                | sed 's|%[0-9A-Fa-f]\{2\}| |g' \
-                | tr -s '/ ?&=' '_' \
-                | sed 's/^_//; s/_$//')
+            PRINTER_NAME=$(echo "$PRINTER_URI" | sed 's|usb://||' | tr '/' '_' | tr ' ' '_')
 
-            # Add printer to CUPS.
-            # Driver priority: model-specific brlaser > generic PWG Raster > raw.
-            # Do NOT use -m everywhere (requires IPP network connection, fails
-            # with USB URIs on newer CUPS).
-            # Sleep recovery is handled by retry-job, wake-printer.sh, and watchdog.
+            # Add printer to CUPS
             if ! lpstat -p "$PRINTER_NAME" > /dev/null 2>&1; then
                 log_info "Adding printer '$PRINTER_NAME' to CUPS..."
-                local brlaser_ppd
-                brlaser_ppd=$(lpinfo -m 2>/dev/null | grep -i "brlaser" | grep -i "$(echo "$PRINTER_NAME" | tr '_' ' ' | awk '{print $NF}')" | head -1 | awk '{print $1}')
-                if [[ -n "$brlaser_ppd" ]] && lpadmin -p "$PRINTER_NAME" -E -v "$PRINTER_URI" -m "$brlaser_ppd" 2>/dev/null; then
-                    log_info "Printer added with brlaser driver: $brlaser_ppd"
-                elif lpadmin -p "$PRINTER_NAME" -E -v "$PRINTER_URI" -m "drv:///cupsfilters.drv/pwgrast.ppd" 2>/dev/null; then
-                    log_info "Printer added with PWG Raster driver"
-                else
-                    log_warn "All drivers failed â€” add printer via CUPS web UI"
-                fi
+                lpadmin -p "$PRINTER_NAME" -E -v "$PRINTER_URI" -m everywhere
                 lpadmin -d "$PRINTER_NAME"  # Set as default
-                log_info "Printer set as default"
+                log_info "Printer added and set as default"
             else
                 log_info "Printer '$PRINTER_NAME' already configured"
             fi
@@ -706,7 +646,7 @@ detect_printer() {
     log_warn "No USB printer detected after $max_attempts attempts."
     log_warn "Connect your printer and run:"
     log_warn "  sudo lpinfo -v  # to list available printers"
-    log_warn "  sudo lpadmin -p PrinterName -E -v usb://... -m drv:///brlaser.drv/MODEL.ppd"
+    log_warn "  sudo lpadmin -p PrinterName -E -v usb://... -m everywhere"
     log_warn "  sudo cupsenable PrinterName && sudo cupsaccept PrinterName"
 }
 
@@ -738,15 +678,15 @@ print_summary() {
     log_info "Web interface: http://${PI_IP}:5000"
     log_info "CUPS admin:    http://${PI_IP}:631"
     echo
-    log_info "â”€â”€ Windows printing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€"
+    log_info "── Windows printing ─────────────────────────────────────────"
     log_info "  Recommended (IPP, no password needed):"
-    log_info "    Settings â†’ Printers â†’ Add â†’ 'not listed' â†’ 'by name' â†’"
+    log_info "    Settings → Printers → Add → 'not listed' → 'by name' →"
     log_info "    http://${PI_IP}:631/printers/<PrinterName>"
     echo
     log_info "  SMB path (File Explorer): \\\\${PI_IP}"
     log_info "    Username: printuser"
     log_info "    Password: printserver  (change: sudo smbpasswd printuser)"
-    log_info "â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€"
+    log_info "─────────────────────────────────────────────────────────────"
     echo
     log_info "To check status: sudo systemctl status printserver-web"
     log_info "To view logs:    sudo journalctl -u printserver-web -f"
@@ -811,47 +751,19 @@ main() {
     configure_log_limits
     configure_system_tuning
 
-    # Start or restart services
+    # If updating, restart services; otherwise start them fresh
     if [[ "$IS_UPDATE" == "true" ]]; then
         restart_services
     else
         start_services
-    fi
-
-    # Always detect and configure printers (both fresh install and update).
-    # On update, existing queues are preserved; detect_printer only adds
-    # if the queue doesn't already exist.
-    detect_printer
-
-    # Enable sharing (may have failed during configure_cups if CUPS wasn't
-    # ready yet; now CUPS is running so retry).
-    # This MUST run BEFORE enable_all_printers because cupsctl can trigger
-    # a CUPS reload that resets printer acceptance state.
-    cupsctl --share-printers --remote-any --no-remote-admin 2>/dev/null || true
-
-    # cupsctl --remote-any can rewrite "Listen *:631" to "Port 631".
-    # Restore it so the printer is accessible from the network.
-    if grep -q "^Port 631" /etc/cups/cupsd.conf && ! grep -q "^Listen \*:631" /etc/cups/cupsd.conf; then
-        sed -i 's/^Port 631/Listen *:631/' /etc/cups/cupsd.conf
-        log_info "Restored Listen *:631 after cupsctl"
-        systemctl restart cups 2>/dev/null || true
-        sleep 2
+        detect_printer
+        enable_all_printers
     fi
 
     # Configure Avahi AFTER printers are detected so service files
     # are generated for any printer already connected at install time.
+    # On future hotplug events, udev triggers this script automatically.
     configure_avahi
-
-    # Enable all printers as the LAST step — after cupsctl and avahi config,
-    # which can both trigger CUPS reloads that reset acceptance state.
-    enable_all_printers
-
-    # Final safety: explicitly accept jobs on all printers one more time.
-    # Belt-and-suspenders because some CUPS versions reset acceptance on reload.
-    sleep 2
-    lpstat -p 2>/dev/null | awk '{print $2}' | while read -r p; do
-        [[ -n "$p" ]] && cupsaccept "$p" 2>/dev/null && cupsenable "$p" 2>/dev/null
-    done || true
 
     print_summary
 }
