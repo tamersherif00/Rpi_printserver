@@ -64,14 +64,25 @@ add_printer() {
 
     if ! lpstat -p "$name" 2>/dev/null | grep -q "$name"; then
         log "Adding CUPS queue '$name' for $uri ..."
-        if lpadmin -p "$name" -E -v "$uri" -m everywhere 2>/dev/null; then
-            lpadmin -d "$name" 2>/dev/null || true   # set as default
-            log "Queue '$name' added (driverless/IPP Everywhere)"
+
+        # CRITICAL: DO NOT use -m everywhere (sends RGB data that monochrome
+        # Brother lasers cannot render -> infinite blank pages).
+        local model
+        model=$(echo "$uri" | sed 's|usb://[^/]*/||' | sed 's|%20.*||' | sed 's|?.*||')
+
+        local brlaser_ppd=""
+        if [[ -n "$model" ]]; then
+            brlaser_ppd=$(lpinfo -m 2>/dev/null | grep -i "brlaser" | grep -i "$model" | head -1 | awk '{print $1}')
+        fi
+
+        if [[ -n "$brlaser_ppd" ]] && lpadmin -p "$name" -E -v "$uri" -m "$brlaser_ppd" 2>/dev/null; then
+            lpadmin -d "$name" 2>/dev/null || true
+            log "Queue '$name' added (driver: $brlaser_ppd)"
+        elif lpadmin -p "$name" -E -v "$uri" -m "drv:///cupsfilters.drv/pwgrast.ppd" 2>/dev/null; then
+            lpadmin -d "$name" 2>/dev/null || true
+            log "Queue '$name' added (PWG Raster / generic)"
         else
-            # Driver-less setup failed — printer may need a specific PPD.
-            # Leave setup to the user via the CUPS web UI; still continue to
-            # enable + share any queue that already exists under a different name.
-            log "lpadmin -m everywhere failed — add the printer via the CUPS web UI"
+            log "lpadmin failed - add the printer via the CUPS web UI"
         fi
     else
         log "Queue '$name' already exists — skipping lpadmin"

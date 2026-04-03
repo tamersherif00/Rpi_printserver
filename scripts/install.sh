@@ -615,12 +615,47 @@ detect_printer() {
             # Extract printer name from URI
             PRINTER_NAME=$(echo "$PRINTER_URI" | sed 's|usb://||' | tr '/' '_' | tr ' ' '_')
 
-            # Add printer to CUPS
+            # ================================================================
+            # CRITICAL: Driver selection for USB printers.
+            # DO NOT use "-m everywhere" — it sends RGB PWG Raster data
+            # which monochrome Brother lasers cannot render (blank pages).
+            #
+            # Priority:
+            #   1. brlaser PPD (model-specific, best quality for Brother)
+            #   2. Generic PWG Raster (works with most USB printers)
+            #   3. Fall back to manual setup via CUPS web UI
+            #
+            # This logic MUST NOT be changed without testing on the actual
+            # printer hardware. The brlaser driver is the only driver that
+            # produces correct output on Brother HL-L2340D series.
+            # ================================================================
             if ! lpstat -p "$PRINTER_NAME" > /dev/null 2>&1; then
                 log_info "Adding printer '$PRINTER_NAME' to CUPS..."
-                lpadmin -p "$PRINTER_NAME" -E -v "$PRINTER_URI" -m everywhere
+
+                # Extract model from URI for brlaser matching
+                # e.g. usb://Brother/HL-L2340D%20series → HL-L2340D
+                local model
+                model=$(echo "$PRINTER_URI" | sed 's|usb://[^/]*/||' | sed 's|%20.*||' | sed 's|?.*||')
+                log_info "Detected model: $model"
+
+                local brlaser_ppd=""
+                if [[ -n "$model" ]]; then
+                    brlaser_ppd=$(lpinfo -m 2>/dev/null | grep -i "brlaser" | grep -i "$model" | head -1 | awk '{print $1}')
+                fi
+
+                if [[ -n "$brlaser_ppd" ]]; then
+                    log_info "Found brlaser driver: $brlaser_ppd"
+                    lpadmin -p "$PRINTER_NAME" -E -v "$PRINTER_URI" -m "$brlaser_ppd"
+                    log_info "Printer added with brlaser driver"
+                elif lpadmin -p "$PRINTER_NAME" -E -v "$PRINTER_URI" -m "drv:///cupsfilters.drv/pwgrast.ppd" 2>/dev/null; then
+                    log_info "Printer added with PWG Raster driver"
+                else
+                    log_warn "No suitable driver found — add printer via CUPS web UI"
+                    log_warn "  http://$(hostname -I | awk '{print $1}'):631/admin"
+                fi
+
                 lpadmin -d "$PRINTER_NAME"  # Set as default
-                log_info "Printer added and set as default"
+                log_info "Printer set as default"
             else
                 log_info "Printer '$PRINTER_NAME' already configured"
             fi

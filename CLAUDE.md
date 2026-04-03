@@ -18,6 +18,23 @@ tests/
 
 cd src; pytest; ruff check .
 
+## Versioning
+
+**IMPORTANT:** On every commit that changes functionality, increment the version
+in `src/printserver/version.py` - update `VERSION` (semver), `RELEASE_DATE`
+(YYYY-MM-DD), and `RELEASE_NOTES` (one-line summary of what changed).
+Also update `version` in `pyproject.toml` to match.
+
+## Critical Rules
+
+- **NEVER use `-m everywhere` in lpadmin** - it sends RGB PWG Raster data that
+  monochrome Brother laser printers cannot render, causing infinite blank page
+  printing. Always use brlaser PPD (`drv:///brlaser.drv/...`) for Brother printers
+  or `drv:///cupsfilters.drv/pwgrast.ppd` as fallback.
+- **NEVER send USB resets (USBDEVFS_RESET) to the printer** - this confuses
+  Brother printer firmware and causes blank page loops. Let CUPS handle USB
+  communication natively via its built-in USB backend.
+
 ## Code Style
 
 Python 3.11 (web interface), Bash (setup scripts), Raspberry Pi OS (Debian-based): Follow standard conventions

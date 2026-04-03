@@ -13,6 +13,7 @@ from flask import Flask, request
 
 from printserver.config import get_config, setup_logging
 from printserver.cups_client import CupsClient, CupsClientError
+from printserver.version import VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +131,7 @@ def create_app(config_override: dict = None) -> Flask:
         CUPS_HOST=server_config.cups.host,
         CUPS_PORT=server_config.cups.port,
         PRINTER_NAME=server_config.printer_name,
+        APP_VERSION=VERSION,
         SEND_FILE_MAX_AGE_DEFAULT=604800,  # 7-day cache for static files
         JSON_SORT_KEYS=False,  # Skip unnecessary JSON key sorting
         TEMPLATES_AUTO_RELOAD=server_config.web.debug,  # Only auto-reload in debug
