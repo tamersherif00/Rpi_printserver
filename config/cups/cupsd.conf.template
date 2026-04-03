@@ -17,11 +17,6 @@ Listen /run/cups/cups.sock
 
 # Enable printer browsing and discovery
 Browsing On
-# Disable CUPS's built-in DNS-SD broadcasting.  We use explicit Avahi
-# service files (created by configure-avahi.sh) instead, because:
-#   1. CUPS's dnssd is unreliable with USB printers + PWG Raster driver
-#   2. Both CUPS and Avahi registering the same name causes "Local name
-#      collision" errors that crash the CUPS scheduler
 BrowseLocalProtocols none
 
 # === Performance tuning ===
@@ -50,22 +45,9 @@ WebInterface Yes
 # until someone manually re-enables it.
 ErrorPolicy retry-job
 
-# How long CUPS waits between retry attempts (seconds).
-# Default is 30s which is too long - Windows polls printer state every
-# ~10s and caches failures.  The watchdog (10s timer) compensates by
-# re-enabling the printer before Windows caches the failure.
-# NOTE: These directives are supported in CUPS 2.4+.  Older versions
-# silently ignore them and use the 30s default.
-JobRetryInterval 5
-JobRetryLimit 10
-
-# Preserve jobs across restarts and retry cycles.
-# Documents are spooled on the Pi (not passed through inline), so they
-# survive printer sleep, USB reconnects, and CUPS restarts. Increased
-# from 1h to 4h to give ample time for wake + retry when the printer
-# is in deep firmware sleep.
+# Preserve jobs across restarts (conservative for 1GB Pi)
 PreserveJobHistory Yes
-PreserveJobFiles 4h
+PreserveJobFiles 1h
 MaxJobs 100
 
 # Limit access to the server
@@ -98,7 +80,7 @@ MaxJobs 100
 
 # Printer sharing policy
 <Policy default>
-  # Job submission and validation — allow without auth for network printing
+  # Job submission and validation
   <Limit Create-Job Print-Job Print-URI Validate-Job>
     Order deny,allow
   </Limit>
@@ -133,12 +115,13 @@ MaxJobs 100
     Order deny,allow
   </Limit>
 
-  # Privacy defaults — silence "No JobPrivateAccess defined" warnings
   JobPrivateAccess default
   JobPrivateValues default
   SubscriptionPrivateAccess default
   SubscriptionPrivateValues default
 </Policy>
+
+# External client authentication
 <Policy authenticated>
   # Allow print operations without authentication — Windows IPP clients
   # issue Validate-Job during "Add Printer" and will hang for 30-60s if
@@ -175,7 +158,6 @@ MaxJobs 100
     Order deny,allow
   </Limit>
 
-  # Privacy defaults — silence "No JobPrivateAccess defined" warnings
   JobPrivateAccess default
   JobPrivateValues default
   SubscriptionPrivateAccess default

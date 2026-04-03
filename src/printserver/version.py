@@ -4,6 +4,6 @@ This file is the single source of truth for the version string.
 Increment VERSION with every release/update commit.
 """
 
-VERSION = "1.6.0"
+VERSION = "1.6.1"
 RELEASE_DATE = "2026-04-02"
-RELEASE_NOTES = "Remove USB wake backend entirely - restores original CUPS USB backend to fix blank pages"
+RELEASE_NOTES = "Revert cupsd.conf to working state - remove JobRetryInterval/Limit that caused blank pages"
