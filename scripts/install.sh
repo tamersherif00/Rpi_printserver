@@ -613,7 +613,14 @@ detect_printer() {
             log_info "Found USB printer: $PRINTER_URI (attempt $attempt)"
 
             # Extract printer name from URI
-            PRINTER_NAME=$(echo "$PRINTER_URI" | sed 's|usb://||' | tr '/' '_' | tr ' ' '_')
+            # e.g. usb://Brother/HL-L2340D%20series?serial=U63879F4N201892
+            #   -> Brother_HL-L2340D_series
+            PRINTER_NAME=$(echo "$PRINTER_URI" \
+                | sed 's|usb://||' \
+                | sed 's|%[0-9A-Fa-f]\{2\}| |g' \
+                | sed 's|?.*||' \
+                | tr -s '/ ' '_' \
+                | sed 's/^_//; s/_$//')
 
             # ================================================================
             # CRITICAL: Driver selection for USB printers.
