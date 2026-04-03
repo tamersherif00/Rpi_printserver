@@ -336,50 +336,35 @@ install_systemd_service() {
 
     cp "$PROJECT_DIR/config/systemd/printserver-web.service" /etc/systemd/system/
 
-    # Install printer watchdog timer â€” auto-recovers printers stuck in
+    # Install printer watchdog timer - auto-recovers printers stuck in
     # "stopped" or "failed" state (e.g. after USB sleep or transient error)
     cp "$PROJECT_DIR/config/systemd/printer-watchdog.service" /etc/systemd/system/
     cp "$PROJECT_DIR/config/systemd/printer-watchdog.timer" /etc/systemd/system/
     cp "$SCRIPT_DIR/printer-watchdog.sh" "$INSTALL_DIR/scripts/"
     chmod +x "$INSTALL_DIR/scripts/printer-watchdog.sh"
 
-    # Install printer wake script â€” sends USB reset to wake printer from
-    # firmware sleep mode (separate from kernel USB autosuspend)
-    cp "$SCRIPT_DIR/wake-printer.sh" "$INSTALL_DIR/scripts/"
-    chmod +x "$INSTALL_DIR/scripts/wake-printer.sh"
-
-    # Install USB backend wrapper that wakes the printer BEFORE the real
-    # USB backend opens the device.  This is the SOLE wake mechanism.
-    # Previous versions also had a CUPS pre-filter and systemd path unit
-    # that sent additional USB resets; those caused blank-page loops on
-    # Brother printers and have been removed.
+    # === RESTORE original USB backend ===
+    # Previous versions replaced /usr/lib/cups/backend/usb with a wake wrapper
+    # that sent USB resets before each job. This caused Brother printers to
+    # print infinite blank pages. The original CUPS USB backend handles
+    # printer communication natively. ErrorPolicy=retry-job + the watchdog
+    # handle recovery without any USB reset hacks.
     local usb_backend="/usr/lib/cups/backend/usb"
     local usb_real="/usr/lib/cups/backend/usb.real"
-    if [[ -f "$usb_backend" && ! -L "$usb_backend" && ! -f "$usb_real" ]]; then
-        mv "$usb_backend" "$usb_real"
-        log_info "Moved original USB backend to usb.real"
+    if [[ -f "$usb_real" ]]; then
+        mv -f "$usb_real" "$usb_backend"
+        chmod 700 "$usb_backend"
+        log_info "Restored original CUPS USB backend (removed wake wrapper)"
     fi
-    cp "$SCRIPT_DIR/usb-printer-wake-backend" "$usb_backend"
-    chmod 700 "$usb_backend"
-    log_info "USB wake backend wrapper installed"
 
-    # Disable the old printer-wake path unit if it was previously enabled.
-    # Wake responsibility now lives exclusively in the backend wrapper.
-    # The path unit caused overlapping USB resets â†’ blank page loops.
+    # Disable all wake-related units (USB resets cause blank page loops)
     systemctl disable --now printer-wake.path 2>/dev/null || true
     systemctl disable --now printer-wake.service 2>/dev/null || true
-    # Copy the disabled unit files so systemd doesn't complain about dangling symlinks
-    cp "$PROJECT_DIR/config/systemd/printer-wake.path" /etc/systemd/system/
-    cp "$PROJECT_DIR/config/systemd/printer-wake.service" /etc/systemd/system/
-    log_info "Printer wake path unit disabled (wake handled by backend wrapper)"
 
-    # Remove the old CUPS pre-filter registration if present.
-    # The filter caused additional USB resets on top of the backend wrapper.
+    # Remove CUPS pre-filter and convs registration if present
     local convs_file="/usr/share/cups/mime/printserver-wake.convs"
-    if [[ -f "$convs_file" ]]; then
-        cp "$PROJECT_DIR/config/cups/printserver-wake.convs" "$convs_file"
-        log_info "CUPS wake filter disabled (replaced with empty convs)"
-    fi
+    [[ -f "$convs_file" ]] && echo "# DISABLED" > "$convs_file"
+    rm -f /usr/lib/cups/filter/cups-pre-filter-wake.sh 2>/dev/null || true
 
     systemctl daemon-reload
     systemctl enable printserver-web.service
@@ -389,20 +374,15 @@ install_systemd_service() {
     systemctl enable smbd.service nmbd.service 2>/dev/null || true
     systemctl enable wsdd.service 2>/dev/null || true
 
-    # Disable cups-browsed — it discovers REMOTE printers which conflicts
-    # with our local USB setup. It creates stale dbus subscriptions that
-    # crash the CUPS 2.4.x scheduler ("Scheduler shutting down due to
-    # program error"). We only serve a local USB printer, no browsing needed.
+    # Disable cups-browsed - it creates stale dbus subscriptions that
+    # crash the CUPS 2.4.x scheduler on headless Pi
     systemctl stop cups-browsed 2>/dev/null || true
     systemctl disable cups-browsed 2>/dev/null || true
     systemctl mask cups-browsed 2>/dev/null || true
-    # Clean stale dbus subscriptions left by cups-browsed
     rm -f /var/cache/cups/subscriptions.conf* 2>/dev/null || true
     log_info "cups-browsed disabled (not needed for local USB printer)"
 
-    # Disable CUPS dbus notifier — it spawns dozens of processes on a headless
-    # Pi (no desktop to receive notifications) and the accumulated stale
-    # subscriptions crash the CUPS 2.4.x scheduler.
+    # Disable CUPS dbus notifier - spawns dozens of processes on headless Pi
     local dbus_notifier="/usr/lib/cups/notifier/dbus"
     if [[ -x "$dbus_notifier" ]]; then
         chmod 000 "$dbus_notifier"
