@@ -32,6 +32,20 @@ DNSSDPort 631
 # (Windows re-establishes TCP often during driver negotiation)
 MaxHoldTime 60
 
+# HTTP persistent connections — Windows IPP port monitor expects HTTP/1.1
+# keep-alive.  Without this, CUPS may close the connection after a single
+# request and Windows caches the dead state as "printer offline".
+KeepAlive On
+KeepAliveTimeout 30
+
+# Explicit operation timeout (matches CUPS default; be explicit so it
+# doesn't change silently across CUPS upgrades)
+Timeout 300
+
+# Max simultaneous clients — conservative for 1 GB Pi but enough for a
+# home/small-office network
+MaxClients 20
+
 # No authentication for print operations — this is a local network print
 # server. Basic auth causes Windows to receive a 401 challenge on
 # Get-Printer-Attributes during "Add Printer", triggering retry loops

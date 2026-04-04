@@ -75,5 +75,36 @@ cleanup_old_jobs() {
     fi
 }
 
+refresh_printer_state() {
+    # Clear stale printer-state-reasons (e.g. "offline-report") that CUPS may
+    # have cached from a previous transient error.  Windows IPP clients cache
+    # these via Get-Printer-Attributes and show the printer as "offline" even
+    # after the CUPS queue is back to normal.  Clearing the reasons and re-
+    # touching printer-is-shared forces CUPS to re-broadcast updated state
+    # via dnssd/Avahi so Windows picks up the change.
+    local refreshed=0
+    while IFS= read -r printer; do
+        [[ -z "$printer" ]] && continue
+
+        local reasons
+        reasons=$(lpoptions -p "$printer" 2>/dev/null \
+            | grep -oP 'printer-state-reasons=\K[^ ]+' || echo "none")
+
+        if [[ "$reasons" != "none" && -n "$reasons" ]]; then
+            log_info "Clearing stale state-reasons on $printer: $reasons"
+            lpadmin -p "$printer" -o printer-state-reasons=none 2>/dev/null || true
+            ((refreshed++))
+        fi
+
+        # Re-touch sharing flag to force CUPS to re-advertise via dnssd
+        lpadmin -p "$printer" -o printer-is-shared=true 2>/dev/null || true
+    done < <(lpstat -p 2>/dev/null | awk '{print $2}')
+
+    if [[ $refreshed -gt 0 ]]; then
+        log_info "Refreshed state on $refreshed printer(s)"
+    fi
+}
+
 recover_printers
 cleanup_old_jobs
+refresh_printer_state

@@ -2,8 +2,8 @@
 # /etc/udev/rules.d/99-printer.rules
 #
 # On connect:  hotplug-printer.sh add
-#   → restarts CUPS, waits for the scheduler, auto-adds the printer queue,
-#     enables job acceptance, marks as shared, then refreshes Avahi (mDNS).
+#   → reloads CUPS (SIGHUP), waits for the scheduler, auto-adds the printer
+#     queue, enables job acceptance, marks as shared, refreshes Avahi (mDNS).
 #   → Windows 10/11, iOS and Android discover the printer automatically once
 #     Avahi broadcasts the IPP/dnssd record.
 #
@@ -11,10 +11,12 @@
 #   → CUPS queue is preserved so queued jobs survive a cable reconnect.
 #     Avahi is refreshed to remove stale mDNS advertisements.
 
-# Restart CUPS immediately so it can re-enumerate the USB device tree.
-# hotplug-printer.sh then waits for the scheduler before doing lpadmin work.
+# Reload (not restart!) CUPS so it re-enumerates USB devices without dropping
+# active IPP connections from Windows clients.  A full restart kills all TCP
+# connections, and Windows' IPP port monitor caches the dead state — the user
+# then has to remove/re-add the printer to print again.
 SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", ACTION=="add", \
-    RUN+="/bin/systemctl restart cups.service"
+    RUN+="/bin/systemctl reload cups.service"
 
 # Disable USB autosuspend for printers — prevents sleep-related latency
 SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", ACTION=="add", \
