@@ -63,21 +63,24 @@ configure_sharing() {
 
     # cupsctl talks to CUPS over HTTP (localhost:631). Even after lpstat confirms
     # the scheduler is running, the socket can still refuse connections briefly.
-    # Retry up to 5 times with a 3-second backoff before giving up (non-fatal).
+    # Use a single combined command with --no-remote-admin to prevent auth
+    # failures when DefaultAuthType is None.
     local max_attempts=5
     local attempt=1
     while [[ $attempt -le $max_attempts ]]; do
-        if cupsctl --share-printers 2>/dev/null && cupsctl --remote-any 2>/dev/null; then
+        local output
+        output=$(cupsctl --share-printers --remote-any --no-remote-admin 2>&1)
+        if [[ $? -eq 0 ]]; then
             log_info "Printer sharing enabled"
             return 0
         fi
-        log_warn "cupsctl attempt $attempt/$max_attempts failed, retrying in 3s..."
+        log_warn "cupsctl attempt $attempt/$max_attempts failed: $output"
         sleep 3
         ((attempt++))
     done
 
     log_warn "cupsctl could not enable sharing after $max_attempts attempts (non-fatal)."
-    log_warn "Run manually once CUPS is stable:  cupsctl --share-printers --remote-any"
+    log_warn "Run manually:  cupsctl --share-printers --remote-any --no-remote-admin"
 }
 
 configure_ipp() {
