@@ -76,42 +76,41 @@ cleanup_old_jobs() {
 }
 
 refresh_printer_state() {
-    # Aggressively clear ALL stale error states that Windows caches.
+    # Fix printers that are actually broken — but ONLY when something is wrong.
     #
-    # Windows' IPP port monitor calls Get-Printer-Attributes and caches the
-    # result. If it ever sees printer-state=5 (stopped) or any non-"none"
-    # printer-state-reasons, it marks the printer as offline PERMANENTLY
-    # until the user removes and re-adds it. There is no automatic recovery
-    # on the Windows side.
-    #
-    # Defense: every watchdog cycle (every 2 min), force all printers to
-    # report state=3 (idle) with no error reasons. This means Windows
-    # always sees a healthy printer on its next poll.
+    # IMPORTANT: Do NOT call lpadmin on every cycle. Each lpadmin call triggers
+    # a CUPS-Add-Modify-Printer event that causes CUPS to re-broadcast via
+    # dnssd/Avahi. Windows sees the printer disappearing and reappearing every
+    # 2 minutes, eventually marking it as unreliable and refusing to send jobs.
+    # Only modify the printer when there's an actual error to clear.
     while IFS= read -r printer; do
         [[ -z "$printer" ]] && continue
 
-        # Force printer to idle state (3) if it's stopped (5)
+        local needs_fix=0
+
+        # Check if printer is stopped/disabled — this is an actual problem
         local state
         state=$(lpstat -p "$printer" 2>/dev/null || true)
         if echo "$state" | grep -qi "disabled\|stopped\|not ready"; then
-            log_info "Force-enabling $printer (was stopped/disabled)"
+            log_info "Recovering $printer (was stopped/disabled)"
             cupsenable "$printer" 2>/dev/null || true
             cupsaccept "$printer" 2>/dev/null || true
+            needs_fix=1
         fi
 
-        # Clear any error reasons — even transient ones like "offline-report",
-        # "media-empty-warning", "cups-ipp-missing-cancel-job" etc.
-        # Windows caches these and never clears them automatically.
+        # Check if there are actual error reasons to clear
         local reasons
         reasons=$(lpoptions -p "$printer" 2>/dev/null \
             | grep -oP 'printer-state-reasons=\K[^ ]+' || echo "none")
         if [[ "$reasons" != "none" && -n "$reasons" ]]; then
-            log_info "Clearing stale state-reasons on $printer: $reasons"
+            log_info "Clearing error reasons on $printer: $reasons"
             lpadmin -p "$printer" -o printer-state-reasons=none 2>/dev/null || true
+            needs_fix=1
         fi
 
-        # Re-touch sharing flag to force CUPS to re-broadcast dnssd state
-        lpadmin -p "$printer" -o printer-is-shared=true 2>/dev/null || true
+        if [[ $needs_fix -gt 0 ]]; then
+            log_info "Printer $printer recovered"
+        fi
     done < <(lpstat -p 2>/dev/null | awk '{print $2}')
 }
 
