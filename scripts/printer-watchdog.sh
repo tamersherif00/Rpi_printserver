@@ -76,33 +76,43 @@ cleanup_old_jobs() {
 }
 
 refresh_printer_state() {
-    # Clear stale printer-state-reasons (e.g. "offline-report") that CUPS may
-    # have cached from a previous transient error.  Windows IPP clients cache
-    # these via Get-Printer-Attributes and show the printer as "offline" even
-    # after the CUPS queue is back to normal.  Clearing the reasons and re-
-    # touching printer-is-shared forces CUPS to re-broadcast updated state
-    # via dnssd/Avahi so Windows picks up the change.
-    local refreshed=0
+    # Aggressively clear ALL stale error states that Windows caches.
+    #
+    # Windows' IPP port monitor calls Get-Printer-Attributes and caches the
+    # result. If it ever sees printer-state=5 (stopped) or any non-"none"
+    # printer-state-reasons, it marks the printer as offline PERMANENTLY
+    # until the user removes and re-adds it. There is no automatic recovery
+    # on the Windows side.
+    #
+    # Defense: every watchdog cycle (every 2 min), force all printers to
+    # report state=3 (idle) with no error reasons. This means Windows
+    # always sees a healthy printer on its next poll.
     while IFS= read -r printer; do
         [[ -z "$printer" ]] && continue
 
+        # Force printer to idle state (3) if it's stopped (5)
+        local state
+        state=$(lpstat -p "$printer" 2>/dev/null || true)
+        if echo "$state" | grep -qi "disabled\|stopped\|not ready"; then
+            log_info "Force-enabling $printer (was stopped/disabled)"
+            cupsenable "$printer" 2>/dev/null || true
+            cupsaccept "$printer" 2>/dev/null || true
+        fi
+
+        # Clear any error reasons — even transient ones like "offline-report",
+        # "media-empty-warning", "cups-ipp-missing-cancel-job" etc.
+        # Windows caches these and never clears them automatically.
         local reasons
         reasons=$(lpoptions -p "$printer" 2>/dev/null \
             | grep -oP 'printer-state-reasons=\K[^ ]+' || echo "none")
-
         if [[ "$reasons" != "none" && -n "$reasons" ]]; then
             log_info "Clearing stale state-reasons on $printer: $reasons"
             lpadmin -p "$printer" -o printer-state-reasons=none 2>/dev/null || true
-            ((refreshed++))
         fi
 
-        # Re-touch sharing flag to force CUPS to re-advertise via dnssd
+        # Re-touch sharing flag to force CUPS to re-broadcast dnssd state
         lpadmin -p "$printer" -o printer-is-shared=true 2>/dev/null || true
     done < <(lpstat -p 2>/dev/null | awk '{print $2}')
-
-    if [[ $refreshed -gt 0 ]]; then
-        log_info "Refreshed state on $refreshed printer(s)"
-    fi
 }
 
 recover_printers

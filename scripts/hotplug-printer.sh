@@ -94,7 +94,10 @@ add_printer() {
         cupsenable  "$printer" 2>/dev/null || true
         cupsaccept  "$printer" 2>/dev/null || true
         lpadmin -p  "$printer" -o printer-is-shared=true 2>/dev/null || true
-        log "Printer '$printer': enabled, accepting jobs, shared"
+        lpadmin -p  "$printer" -o printer-error-policy=retry-job 2>/dev/null || true
+        # Clear any stale error reasons so Windows doesn't cache them
+        lpadmin -p  "$printer" -o printer-state-reasons=none 2>/dev/null || true
+        log "Printer '$printer': enabled, accepting, shared, retry-job"
     done < <(lpstat -p 2>/dev/null | awk '{print $2}')
 }
 
