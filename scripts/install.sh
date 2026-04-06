@@ -650,18 +650,16 @@ detect_printer() {
                     brlaser_ppd=$(lpinfo -m 2>/dev/null | grep -i "brlaser" | grep -i "$model" | head -1 | awk '{print $1}')
                 fi
 
-                if [[ -n "$brlaser_ppd" ]]; then
-                    log_info "Found brlaser driver: $brlaser_ppd"
-                    lpadmin -p "$PRINTER_NAME" -E -v "$PRINTER_URI" -m "$brlaser_ppd"
-                    log_info "Printer added with brlaser driver"
-                elif lpadmin -p "$PRINTER_NAME" -E -v "$PRINTER_URI" -m "drv:///cupsfilters.drv/pwgrast.ppd" 2>/dev/null; then
+                if [[ -n "$brlaser_ppd" ]] && lpadmin -p "$PRINTER_NAME" -E -v "$PRINTER_URI" -m "$brlaser_ppd" 2>&1; then
+                    log_info "Printer added with brlaser driver: $brlaser_ppd"
+                elif lpadmin -p "$PRINTER_NAME" -E -v "$PRINTER_URI" -m "drv:///cupsfilters.drv/pwgrast.ppd" 2>&1; then
                     log_info "Printer added with PWG Raster driver"
                 else
-                    log_warn "No suitable driver found — add printer via CUPS web UI"
-                    log_warn "  http://$(hostname -I | awk '{print $1}'):631/admin"
+                    log_warn "Driver-based setup failed — trying raw queue"
+                    lpadmin -p "$PRINTER_NAME" -E -v "$PRINTER_URI" 2>&1 || true
                 fi
 
-                lpadmin -d "$PRINTER_NAME"  # Set as default
+                lpadmin -d "$PRINTER_NAME" 2>/dev/null || true  # Set as default
                 log_info "Printer set as default"
             else
                 log_info "Printer '$PRINTER_NAME' already configured"
@@ -688,7 +686,7 @@ detect_printer() {
     log_warn "No USB printer detected after $max_attempts attempts."
     log_warn "Connect your printer and run:"
     log_warn "  sudo lpinfo -v  # to list available printers"
-    log_warn "  sudo lpadmin -p PrinterName -E -v usb://... -m everywhere"
+    log_warn "  sudo lpadmin -p PrinterName -E -v 'usb://...' -m 'drv:///brlaser.drv/MODEL.ppd'"
     log_warn "  sudo cupsenable PrinterName && sudo cupsaccept PrinterName"
 }
 
@@ -793,18 +791,22 @@ main() {
     configure_log_limits
     configure_system_tuning
 
-    # If updating, restart services; otherwise start them fresh
+    # Start or restart services
     if [[ "$IS_UPDATE" == "true" ]]; then
         restart_services
     else
         start_services
-        detect_printer
-        enable_all_printers
     fi
 
-    # Configure Avahi AFTER printers are detected so service files
-    # are generated for any printer already connected at install time.
-    # On future hotplug events, udev triggers this script automatically.
+    # Always detect and configure printers (both fresh install and update).
+    # detect_printer skips if the queue already exists.
+    detect_printer
+    enable_all_printers
+
+    # Enable sharing (retry here since CUPS is now fully running)
+    cupsctl --share-printers --remote-any --no-remote-admin 2>/dev/null || true
+
+    # Configure Avahi AFTER printers are detected
     configure_avahi
 
     print_summary
