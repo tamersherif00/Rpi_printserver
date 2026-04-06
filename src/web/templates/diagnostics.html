@@ -155,6 +155,38 @@
     </div>
 </div>
 
+<!-- CUPS Debug Logging -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-bug"></i> CUPS Debug Logging</h5>
+                <div class="d-flex gap-2 align-items-center">
+                    <span class="badge" id="debug-level-badge">Loading...</span>
+                    <button class="btn btn-sm btn-warning" id="debug-toggle-btn" onclick="toggleCupsDebug()">
+                        <i class="bi bi-toggles"></i> <span id="debug-toggle-text">Enable</span>
+                    </button>
+                    <button class="btn btn-sm btn-outline-primary" onclick="loadDebugLogs()">
+                        <i class="bi bi-arrow-clockwise"></i> Refresh Logs
+                    </button>
+                </div>
+            </div>
+            <div class="card-body">
+                <p class="text-muted small mb-2">
+                    Enable verbose CUPS logging to diagnose print failures. Disable after debugging to reduce disk usage.
+                </p>
+                <div class="mb-2">
+                    <div class="btn-group btn-group-sm" role="group">
+                        <button class="btn btn-outline-secondary" onclick="loadDebugLogs('error')">Error Log</button>
+                        <button class="btn btn-outline-secondary" onclick="loadDebugLogs('access')">Access Log (IPP operations)</button>
+                    </div>
+                </div>
+                <pre id="debug-log-output" class="mb-0 p-3" style="max-height: 400px; overflow-y: auto; background: #1e1e1e; color: #d4d4d4; font-size: 0.75rem; white-space: pre-wrap; word-break: break-all;">Click "Refresh Logs" or select a log type to view entries.</pre>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Log Viewer -->
 <div class="row mb-4">
     <div class="col-12">
@@ -524,9 +556,85 @@
         }
     }
 
+    // ── CUPS Debug Logging ──────────────────────────────────────────────────
+
+    async function loadCupsDebugLevel() {
+        try {
+            const resp = await fetch('/api/debug/cups-log-level');
+            const data = await resp.json();
+            const badge = document.getElementById('debug-level-badge');
+            const btn = document.getElementById('debug-toggle-text');
+            const level = data.level || 'unknown';
+            const isDebug = level.startsWith('debug');
+            badge.textContent = level;
+            badge.className = `badge ${isDebug ? 'bg-warning' : 'bg-success'}`;
+            btn.textContent = isDebug ? 'Disable Debug' : 'Enable Debug';
+        } catch (e) {
+            console.error('Failed to load CUPS log level:', e);
+        }
+    }
+
+    async function toggleCupsDebug() {
+        const badge = document.getElementById('debug-level-badge');
+        const currentLevel = badge.textContent;
+        const newLevel = currentLevel.startsWith('debug') ? 'warn' : 'debug2';
+        try {
+            const resp = await fetch('/api/debug/cups-log-level', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ level: newLevel }),
+            });
+            const data = await resp.json();
+            if (resp.ok) {
+                showToast(`CUPS log level set to ${data.level}`, 'success');
+                loadCupsDebugLevel();
+            } else {
+                showToast(data.error || 'Failed to set log level', 'error');
+            }
+        } catch (e) {
+            showToast('Failed to toggle debug logging', 'error');
+        }
+    }
+
+    async function loadDebugLogs(type) {
+        type = type || 'error';
+        const output = document.getElementById('debug-log-output');
+        output.textContent = 'Loading...';
+        try {
+            const url = type === 'access'
+                ? '/api/debug/cups-access-logs?lines=200'
+                : '/api/debug/cups-logs?lines=200';
+            const resp = await fetch(url);
+            const data = await resp.json();
+            if (data.entries && data.entries.length > 0) {
+                output.textContent = data.entries.join('\n');
+            } else {
+                output.textContent = 'No log entries found.';
+            }
+            output.scrollTop = output.scrollHeight;
+        } catch (e) {
+            output.textContent = 'Failed to load logs: ' + e.message;
+        }
+    }
+
+    function showToast(message, type) {
+        console.log(`[${type}] ${message}`);
+        const container = document.getElementById('toast-container');
+        if (container) {
+            const toast = document.createElement('div');
+            toast.className = `toast align-items-center text-white bg-${type === 'error' ? 'danger' : 'success'}`;
+            toast.setAttribute('role', 'alert');
+            toast.innerHTML = `<div class="d-flex"><div class="toast-body">${message}</div><button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button></div>`;
+            container.appendChild(toast);
+            if (typeof bootstrap !== 'undefined') new bootstrap.Toast(toast).show();
+            setTimeout(() => toast.remove(), 5000);
+        }
+    }
+
     // Load on page init
     document.addEventListener('DOMContentLoaded', function() {
         refreshDiagnostics();
+        loadCupsDebugLevel();
     });
 </script>
 {% endblock %}

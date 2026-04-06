@@ -1047,6 +1047,75 @@ def register_routes(app: Flask) -> None:
         except CupsClientError as e:
             return jsonify({"error": str(e), "code": "CUPS_ERROR"}), 500
 
+    # ── Debug Logging Toggle ────────────────────────────────────────────────
+
+    @app.route("/api/debug/cups-log-level", methods=["GET"])
+    def api_get_cups_log_level():
+        """Get current CUPS log level."""
+        try:
+            result = subprocess.run(
+                ["cupsctl"], capture_output=True, text=True, timeout=5,
+            )
+            for line in result.stdout.strip().split("\n"):
+                if line.startswith("LogLevel"):
+                    level = line.split("=", 1)[1].strip() if "=" in line else "unknown"
+                    return jsonify({"level": level})
+            return jsonify({"level": "warn"})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/debug/cups-log-level", methods=["POST"])
+    def api_set_cups_log_level():
+        """Toggle CUPS log level between warn and debug2."""
+        data = request.get_json(silent=True) or {}
+        level = data.get("level", "debug2")
+        if level not in ("warn", "info", "debug", "debug2"):
+            return jsonify({"error": f"Invalid level: {level}"}), 400
+        try:
+            subprocess.run(
+                ["cupsctl", f"LogLevel={level}"],
+                capture_output=True, text=True, timeout=5, check=True,
+            )
+            return jsonify({"level": level, "message": f"CUPS log level set to {level}"})
+        except subprocess.CalledProcessError as e:
+            return jsonify({"error": f"cupsctl failed: {e.stderr}"}), 500
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/debug/cups-logs", methods=["GET"])
+    def api_get_cups_debug_logs():
+        """Get recent CUPS error log entries (supports debug2 verbose output)."""
+        try:
+            lines = min(int(request.args.get("lines", 200)), 1000)
+        except (ValueError, TypeError):
+            lines = 200
+        try:
+            result = subprocess.run(
+                ["tail", "-n", str(lines), "/var/log/cups/error_log"],
+                capture_output=True, text=True, timeout=5,
+            )
+            log_lines = result.stdout.strip().split("\n") if result.stdout.strip() else []
+            return jsonify({"entries": log_lines, "count": len(log_lines)})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/debug/cups-access-logs", methods=["GET"])
+    def api_get_cups_access_logs():
+        """Get recent CUPS access log entries (shows IPP operations from clients)."""
+        try:
+            lines = min(int(request.args.get("lines", 100)), 500)
+        except (ValueError, TypeError):
+            lines = 100
+        try:
+            result = subprocess.run(
+                ["tail", "-n", str(lines), "/var/log/cups/access_log"],
+                capture_output=True, text=True, timeout=5,
+            )
+            log_lines = result.stdout.strip().split("\n") if result.stdout.strip() else []
+            return jsonify({"entries": log_lines, "count": len(log_lines)})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
     # ── Wake-on-LAN ───────────────────────────────────────────────────────────
 
     @app.route("/wol")
