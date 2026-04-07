@@ -62,21 +62,44 @@ class PrintJob:
         printer_uri = data.get("job-printer-uri") or data.get("job_printer_uri", "")
         printer_name = printer_uri.split("/")[-1] if printer_uri else ""
 
-        # Get job title - try multiple attribute names and handle byte strings
-        title = data.get("job-name") or data.get("job_name", "Untitled")
+        # Get job title - try multiple attribute names and handle byte strings.
+        # CUPS may not preserve job-name after completion; fall back to
+        # document-format or a generated label.
+        title = (
+            data.get("job-name")
+            or data.get("job_name")
+            or data.get("document-name")
+            or data.get("document_name")
+            or ""
+        )
         if isinstance(title, bytes):
             title = title.decode("utf-8", errors="replace")
-        if not title or title == "":
-            title = "Untitled"
+        if not title:
+            # Generate a useful label from document format
+            doc_fmt = data.get("document-format", "")
+            if "pdf" in str(doc_fmt):
+                title = "PDF Document"
+            elif "postscript" in str(doc_fmt):
+                title = "PostScript Document"
+            elif doc_fmt:
+                title = f"Print Job ({doc_fmt.split('/')[-1]})"
+            else:
+                title = f"Print Job #{job_id}"
 
-        # Get username - try multiple attribute names
+        # Get username - try multiple attribute names.
+        # Windows IPP jobs use job-originating-user-name; CUPS may also
+        # store it without hyphens after internal processing.
         user = (
             data.get("job-originating-user-name")
             or data.get("job_originating_user_name")
-            or "unknown"
+            or data.get("job-originating-host-name")
+            or data.get("job_originating_host_name")
+            or ""
         )
         if isinstance(user, bytes):
             user = user.decode("utf-8", errors="replace")
+        if not user:
+            user = "Local"
 
         # Get state message
         state_message = (
@@ -192,21 +215,17 @@ def get_all_jobs(
     """
     jobs_data = cups_client.get_jobs(which_jobs=which_jobs)
 
-    # pycups getJobs() may return incomplete data for some jobs (especially
-    # completed ones). For jobs missing key fields, enrich from per-job
-    # getJobAttributes() which always returns the full attribute set.
+    # pycups getJobs() returns only minimal data (often just job-uri).
+    # Always fetch full attributes per job via getJobAttributes() which
+    # returns timestamps, state, username, job-name, size, etc.
     enriched: list[PrintJob] = []
-    for job_id, data in jobs_data.items():
-        job = PrintJob.from_cups_data(job_id, data)
-
-        # If key fields are missing, try per-job query for full attributes
-        if job.title == "Untitled" or job.user == "unknown" or job.state == "unknown" or job.created_at is None:
-            try:
-                full_data = cups_client.get_job_attributes(job_id)
-                job = PrintJob.from_cups_data(job_id, full_data)
-            except Exception:
-                pass  # Keep the partial job data
-
+    for job_id in jobs_data:
+        try:
+            full_data = cups_client.get_job_attributes(job_id)
+            job = PrintJob.from_cups_data(job_id, full_data)
+        except Exception:
+            # Fallback to the sparse getJobs() data if per-job query fails
+            job = PrintJob.from_cups_data(job_id, jobs_data[job_id])
         enriched.append(job)
 
     # Filter by printer if specified
