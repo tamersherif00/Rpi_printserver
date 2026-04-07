@@ -34,25 +34,28 @@ class PrintJob:
         Returns:
             PrintJob instance.
         """
-        # Parse timestamps - try multiple attribute names
+        # Parse timestamps - try multiple attribute names.
+        # CUPS returns 0 (Unix epoch) when a timestamp isn't set yet
+        # (e.g. time-at-completed for a pending job), so treat 0 as missing.
         created_at = None
         completed_at = None
 
-        # Try different timestamp attribute names
         for ts_attr in ["time-at-creation", "time_at_creation"]:
-            if ts_attr in data:
+            ts_val = data.get(ts_attr)
+            if ts_val:  # skip 0 and None
                 try:
-                    created_at = datetime.fromtimestamp(data[ts_attr])
+                    created_at = datetime.fromtimestamp(ts_val)
                     break
-                except (ValueError, TypeError):
+                except (ValueError, TypeError, OSError):
                     pass
 
         for ts_attr in ["time-at-completed", "time_at_completed"]:
-            if ts_attr in data:
+            ts_val = data.get(ts_attr)
+            if ts_val:  # skip 0 and None
                 try:
-                    completed_at = datetime.fromtimestamp(data[ts_attr])
+                    completed_at = datetime.fromtimestamp(ts_val)
                     break
-                except (ValueError, TypeError):
+                except (ValueError, TypeError, OSError):
                     pass
 
         # Extract printer name from URI - try multiple attribute names
@@ -188,19 +191,35 @@ def get_all_jobs(
         List of PrintJob instances, newest first.
     """
     jobs_data = cups_client.get_jobs(which_jobs=which_jobs)
-    jobs = [PrintJob.from_cups_data(job_id, data) for job_id, data in jobs_data.items()]
+
+    # pycups getJobs() may return incomplete data for some jobs (especially
+    # completed ones). For jobs missing key fields, enrich from per-job
+    # getJobAttributes() which always returns the full attribute set.
+    enriched: list[PrintJob] = []
+    for job_id, data in jobs_data.items():
+        job = PrintJob.from_cups_data(job_id, data)
+
+        # If key fields are missing, try per-job query for full attributes
+        if job.title == "Untitled" or job.user == "unknown" or job.state == "unknown" or job.created_at is None:
+            try:
+                full_data = cups_client.get_job_attributes(job_id)
+                job = PrintJob.from_cups_data(job_id, full_data)
+            except Exception:
+                pass  # Keep the partial job data
+
+        enriched.append(job)
 
     # Filter by printer if specified
     if printer_name:
-        jobs = [j for j in jobs if j.printer_name == printer_name]
+        enriched = [j for j in enriched if j.printer_name == printer_name]
 
     # Sort by creation time (newest first)
-    jobs.sort(key=lambda j: j.created_at or datetime.min, reverse=True)
+    enriched.sort(key=lambda j: j.created_at or datetime.min, reverse=True)
 
     if limit is not None:
-        jobs = jobs[:limit]
+        enriched = enriched[:limit]
 
-    return jobs
+    return enriched
 
 
 def get_job(cups_client: CupsClient, job_id: int) -> Optional[PrintJob]:

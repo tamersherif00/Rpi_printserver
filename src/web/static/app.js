@@ -188,7 +188,7 @@ function updateJobsTable(jobs) {
     if (jobs.length === 0) {
         tbody.innerHTML = `
             <tr>
-                <td colspan="7" class="text-center text-muted py-4">
+                <td colspan="8" class="text-center text-muted py-4">
                     <i class="bi bi-inbox fs-1"></i>
                     <p class="mt-2">No print jobs in queue</p>
                 </td>
@@ -197,28 +197,39 @@ function updateJobsTable(jobs) {
         return;
     }
 
-    tbody.innerHTML = jobs.map(job => `
-        <tr data-job-id="${job.id}" class="job-row">
+    tbody.innerHTML = jobs.map(job => {
+        const isComplete = ['completed', 'canceled', 'aborted'].includes(job.state);
+        const isActive = ['processing', 'processing-stopped'].includes(job.state);
+        const isPending = ['pending', 'pending-held'].includes(job.state);
+        const rowClass = isComplete ? 'table-light text-muted' : '';
+        const icon = isComplete ? '<i class="bi bi-check-circle text-success me-1"></i>'
+            : isActive ? '<i class="bi bi-printer text-primary me-1"></i>'
+            : isPending ? '<i class="bi bi-clock text-warning me-1"></i>'
+            : '<i class="bi bi-exclamation-circle text-danger me-1"></i>';
+        return `
+        <tr data-job-id="${job.id}" class="job-row ${rowClass}">
             <td>${job.id}</td>
-            <td>${escapeHtml(job.title)}</td>
+            <td>${icon}${escapeHtml(job.title)}</td>
             <td>${escapeHtml(job.user)}</td>
             <td>
                 <span class="badge ${getStatusBadgeClass(job.state)}">
                     ${formatState(job.state)}
                 </span>
+                ${job.state_message ? `<br><small class="text-muted">${escapeHtml(job.state_message)}</small>` : ''}
             </td>
-            <td>${job.pages ? `${job.pages_completed}/${job.pages}` : '-'}</td>
+            <td>${formatSize(job.size)}</td>
             <td>${job.created_at ? formatDate(job.created_at) : '-'}</td>
+            <td>${job.completed_at ? formatDate(job.completed_at) : '-'}</td>
             <td>
                 ${canCancel(job.state) ?
-                    `<button class="btn btn-sm btn-danger" onclick="cancelJob(${job.id})">
+                    `<button class="btn btn-sm btn-outline-danger" onclick="cancelJob(${job.id})">
                         <i class="bi bi-x-circle"></i> Cancel
                     </button>` :
-                    '<span class="text-muted">-</span>'
+                    '<span class="text-muted small">-</span>'
                 }
             </td>
-        </tr>
-    `).join('');
+        </tr>`;
+    }).join('');
 }
 
 /**
@@ -293,7 +304,26 @@ function getStatusBadgeClass(state) {
  * Format job state for display
  */
 function formatState(state) {
-    return state.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+    const labels = {
+        'processing': 'Printing...',
+        'completed': 'Printed',
+        'pending': 'Queued',
+        'pending-held': 'Held',
+        'canceled': 'Canceled',
+        'aborted': 'Failed',
+        'processing-stopped': 'Paused',
+    };
+    return labels[state] || state.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+}
+
+/**
+ * Format file size for display
+ */
+function formatSize(bytes) {
+    if (!bytes || bytes <= 0) return '-';
+    if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + ' MB';
+    if (bytes >= 1024) return Math.round(bytes / 1024) + ' KB';
+    return bytes + ' B';
 }
 
 /**

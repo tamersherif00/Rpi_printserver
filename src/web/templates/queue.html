@@ -39,7 +39,7 @@
     <div class="col-auto">
         <select class="form-select" id="statusFilter" onchange="filterJobs()">
             <option value="all">All Jobs</option>
-            <option value="pending">Pending</option>
+            <option value="pending">Active / Pending</option>
             <option value="completed">Completed</option>
         </select>
     </div>
@@ -52,21 +52,33 @@
             <table class="table table-hover" id="jobsTable">
                 <thead class="table-light">
                     <tr>
-                        <th>ID</th>
+                        <th style="width: 50px;">ID</th>
                         <th>Document</th>
-                        <th>User</th>
+                        <th>From</th>
                         <th>Status</th>
-                        <th>Pages</th>
+                        <th>Size</th>
                         <th>Submitted</th>
-                        <th>Actions</th>
+                        <th>Completed</th>
+                        <th style="width: 100px;">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% if jobs %}
                         {% for job in jobs %}
-                        <tr data-job-id="{{ job.id }}" class="job-row">
+                        <tr data-job-id="{{ job.id }}" class="job-row {% if job.is_complete %}table-light text-muted{% endif %}">
                             <td>{{ job.id }}</td>
-                            <td>{{ job.title }}</td>
+                            <td>
+                                {% if job.is_complete %}
+                                    <i class="bi bi-check-circle text-success me-1"></i>
+                                {% elif job.is_active %}
+                                    <i class="bi bi-printer text-primary me-1"></i>
+                                {% elif job.is_pending %}
+                                    <i class="bi bi-clock text-warning me-1"></i>
+                                {% else %}
+                                    <i class="bi bi-exclamation-circle text-danger me-1"></i>
+                                {% endif %}
+                                {{ job.title }}
+                            </td>
                             <td>{{ job.user }}</td>
                             <td>
                                 <span class="badge
@@ -74,38 +86,55 @@
                                     {% elif job.state == 'processing' %}bg-primary
                                     {% elif job.state == 'completed' %}bg-success
                                     {% elif job.state == 'canceled' %}bg-secondary
-                                    {% else %}bg-danger{% endif %}">
-                                    {{ job.state | replace('-', ' ') | title }}
+                                    {% elif job.state == 'aborted' %}bg-danger
+                                    {% else %}bg-secondary{% endif %}">
+                                    {% if job.state == 'processing' %}Printing...
+                                    {% elif job.state == 'completed' %}Printed
+                                    {% elif job.state == 'pending' %}Queued
+                                    {% elif job.state == 'pending-held' %}Held
+                                    {% elif job.state == 'canceled' %}Canceled
+                                    {% elif job.state == 'aborted' %}Failed
+                                    {% else %}{{ job.state | replace('-', ' ') | title }}{% endif %}
                                 </span>
+                                {% if job.state_message %}
+                                <br><small class="text-muted">{{ job.state_message }}</small>
+                                {% endif %}
                             </td>
                             <td>
-                                {% if job.pages %}
-                                    {{ job.pages_completed }}/{{ job.pages }}
-                                {% else %}
-                                    -
-                                {% endif %}
+                                {% if job.size > 0 %}
+                                    {% if job.size >= 1048576 %}
+                                        {{ "%.1f"|format(job.size / 1048576) }} MB
+                                    {% elif job.size >= 1024 %}
+                                        {{ (job.size / 1024)|int }} KB
+                                    {% else %}
+                                        {{ job.size }} B
+                                    {% endif %}
+                                {% else %}-{% endif %}
                             </td>
                             <td>
                                 {% if job.created_at %}
-                                    {{ job.created_at.strftime('%Y-%m-%d %H:%M') }}
-                                {% else %}
-                                    -
-                                {% endif %}
+                                    {{ job.created_at.strftime('%b %d, %H:%M') }}
+                                {% else %}-{% endif %}
+                            </td>
+                            <td>
+                                {% if job.completed_at %}
+                                    {{ job.completed_at.strftime('%b %d, %H:%M') }}
+                                {% else %}-{% endif %}
                             </td>
                             <td>
                                 {% if job.can_cancel %}
-                                <button class="btn btn-sm btn-danger" onclick="cancelJob({{ job.id }})">
+                                <button class="btn btn-sm btn-outline-danger" onclick="cancelJob({{ job.id }})">
                                     <i class="bi bi-x-circle"></i> Cancel
                                 </button>
                                 {% else %}
-                                <span class="text-muted">-</span>
+                                <span class="text-muted small">-</span>
                                 {% endif %}
                             </td>
                         </tr>
                         {% endfor %}
                     {% else %}
                         <tr>
-                            <td colspan="7" class="text-center text-muted py-4">
+                            <td colspan="8" class="text-center text-muted py-4">
                                 <i class="bi bi-inbox fs-1"></i>
                                 <p class="mt-2">No print jobs in queue</p>
                             </td>
