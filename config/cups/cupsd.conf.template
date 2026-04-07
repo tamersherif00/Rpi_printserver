@@ -94,6 +94,15 @@ MaxJobs 100
 
 # Printer sharing policy
 <Policy default>
+  # Expose all job attributes (job-name, job-originating-user-name, etc.)
+  # to any client. By default CUPS hides these as "private" from non-owner
+  # queries, which makes the web UI show "Untitled" and "unknown" for every
+  # completed job. This is a local print server — no privacy concern.
+  JobPrivateAccess all
+  JobPrivateValues none
+  SubscriptionPrivateAccess all
+  SubscriptionPrivateValues none
+
   # Allow print operations without authentication — Windows IPP clients
   # call Validate-Job and Create-Job during printing. If these get an
   # auth challenge, Windows caches the printer as permanently broken
@@ -135,6 +144,11 @@ MaxJobs 100
 
 # External client authentication
 <Policy authenticated>
+  JobPrivateAccess all
+  JobPrivateValues none
+  SubscriptionPrivateAccess all
+  SubscriptionPrivateValues none
+
   # Allow print operations without authentication — Windows IPP clients
   # issue Validate-Job during "Add Printer" and will hang for 30-60s if
   # they get an auth challenge they don't expect.
