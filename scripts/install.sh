@@ -346,6 +346,15 @@ install_systemd_service() {
     systemctl enable smbd.service nmbd.service 2>/dev/null || true
     systemctl enable wsdd.service 2>/dev/null || true
 
+    # Disable cups-browsed: its stale dbus subscriptions crash the CUPS 2.4.x
+    # scheduler, and it only discovers REMOTE printers (not needed here).
+    # Stop, disable, mask, and wipe its subscription cache so a CUPS reload
+    # can't resurrect it.
+    systemctl stop cups-browsed 2>/dev/null || true
+    systemctl disable cups-browsed 2>/dev/null || true
+    systemctl mask cups-browsed 2>/dev/null || true
+    rm -f /var/cache/cups/subscriptions.conf /var/cache/cups/subscriptions.conf.O 2>/dev/null || true
+
     log_info "Systemd services configured"
 }
 
@@ -370,15 +379,26 @@ SyncIntervalSec=30s
 EOF
     systemctl restart systemd-journald 2>/dev/null || true
 
-    # CUPS error log rotation
-    cat > /etc/logrotate.d/cups-printserver << 'EOF'
-/var/log/cups/error_log {
+    # CUPS error log rotation.
+    #
+    # We deliberately REPLACE Debian's stock /etc/logrotate.d/cups-daemon.
+    # Its postrotate runs `invoke-rc.d cups reload`, which on Raspberry Pi
+    # OS causes CUPS to drop its dnssd/Avahi registrations every night.
+    # Windows then stops seeing the printer until the next reboot or
+    # manual re-share. copytruncate avoids the reload entirely.
+    if [[ -f /etc/logrotate.d/cups-daemon ]] && [[ ! -L /etc/logrotate.d/cups-daemon ]]; then
+        mv /etc/logrotate.d/cups-daemon /etc/logrotate.d/cups-daemon.disabled-by-printserver
+    fi
+    rm -f /etc/logrotate.d/cups-printserver  # old filename, superseded
+    cat > /etc/logrotate.d/cups-daemon << 'EOF'
+/var/log/cups/access_log /var/log/cups/error_log /var/log/cups/page_log {
     daily
     rotate 3
     compress
     delaycompress
     missingok
     notifempty
+    copytruncate
 }
 EOF
 

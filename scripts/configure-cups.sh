@@ -87,51 +87,12 @@ configure_ipp() {
     log_info "Configuring IPP for Windows and mobile printing..."
 
     # Ensure IPP is enabled (default in modern CUPS)
-    # IPP Everywhere support is built into cups-filters
-
-    # Enable cups-browsed for better discovery
-    if systemctl is-enabled cups-browsed > /dev/null 2>&1; then
-        log_info "cups-browsed is enabled"
-    else
-        systemctl enable cups-browsed 2>/dev/null || true
-    fi
-
-    # Tune cups-browsed for faster printer discovery responses
-    configure_cups_browsed
-}
-
-configure_cups_browsed() {
-    local browsed_conf="/etc/cups/cups-browsed.conf"
-
-    if [[ ! -f "$browsed_conf" ]]; then
-        log_info "cups-browsed.conf not found, skipping tuning"
-        return 0
-    fi
-
-    log_info "Tuning cups-browsed for faster discovery..."
-
-    # Reduce browse interval: how often we broadcast our printers (default 30s)
-    # 5s keeps us visible between Windows scan cycles (every 5-10s)
-    if grep -q "^BrowseInterval" "$browsed_conf"; then
-        sed -i 's/^BrowseInterval.*/BrowseInterval 5/' "$browsed_conf"
-    else
-        echo "BrowseInterval 5" >> "$browsed_conf"
-    fi
-
-    # Reduce timeout for remote printers (default 300s)
-    if grep -q "^BrowseTimeout" "$browsed_conf"; then
-        sed -i 's/^BrowseTimeout.*/BrowseTimeout 30/' "$browsed_conf"
-    else
-        echo "BrowseTimeout 30" >> "$browsed_conf"
-    fi
-
-    # Use DNSSD for browsing (most reliable with Avahi)
-    if ! grep -q "^BrowseRemoteProtocols" "$browsed_conf"; then
-        echo "BrowseRemoteProtocols dnssd cups" >> "$browsed_conf"
-    fi
-
-    systemctl restart cups-browsed 2>/dev/null || true
-    log_info "cups-browsed tuned for faster discovery"
+    # IPP Everywhere support is built into cups-filters.
+    #
+    # cups-browsed is intentionally NOT enabled here. Its stale dbus
+    # subscriptions crash the CUPS 2.4.x scheduler, and it only discovers
+    # REMOTE printers — which a local USB print server does not need.
+    # install.sh stops, disables and masks it.
 }
 
 configure_samba() {
@@ -235,10 +196,6 @@ restart_cups() {
         log_warn "CUPS scheduler not confirmed ready after $max_attempts attempts — continuing"
     fi
 
-    # Also restart cups-browsed if running (picks up new config)
-    if systemctl is-active cups-browsed > /dev/null 2>&1; then
-        systemctl restart cups-browsed 2>/dev/null || true
-    fi
 }
 
 add_user_to_lpadmin() {
