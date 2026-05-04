@@ -229,7 +229,7 @@ install_python_app() {
 
     # Copy and set up helper scripts
     mkdir -p "$INSTALL_DIR/scripts"
-    for script in set-hostname.sh restart-service.sh configure-avahi.sh enable-printers.sh configure-samba.sh hotplug-printer.sh; do
+    for script in set-hostname.sh restart-service.sh configure-avahi.sh enable-printers.sh configure-samba.sh hotplug-printer.sh set-network.sh; do
         if [[ -f "$SCRIPT_DIR/$script" ]]; then
             cp "$SCRIPT_DIR/$script" "$INSTALL_DIR/scripts/"
             chmod +x "$INSTALL_DIR/scripts/$script"
@@ -261,6 +261,7 @@ configure_sudoers() {
 # Allow printserver web service to manage system without password
 ALL ALL=(root) NOPASSWD: /opt/printserver/scripts/set-hostname.sh
 ALL ALL=(root) NOPASSWD: /opt/printserver/scripts/restart-service.sh
+ALL ALL=(root) NOPASSWD: /opt/printserver/scripts/set-network.sh
 EOF
 
     chmod 440 "$SUDOERS_FILE"

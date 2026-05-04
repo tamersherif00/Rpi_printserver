@@ -21,6 +21,12 @@ from printserver.system_utils import (
     requires_root,
     SystemUtilsError,
 )
+from printserver.network_utils import (
+    get_network_config,
+    set_static_ip,
+    set_dhcp,
+    NetworkConfigError,
+)
 from printserver.wol import (
     list_devices as list_wol_devices,
     add_device as add_wol_device,
@@ -980,6 +986,73 @@ def register_routes(app: Flask) -> None:
                 "error": str(e),
                 "code": "SYSTEM_ERROR",
             }), 500
+
+    # ── Network (static IP) ────────────────────────────────────────────────
+
+    @app.route("/api/system/network", methods=["GET"])
+    def api_get_network():
+        """Return current IPv4 network configuration."""
+        try:
+            return jsonify(get_network_config())
+        except NetworkConfigError as exc:
+            return jsonify({"error": str(exc), "code": "NETWORK_ERROR"}), 500
+
+    @app.route("/api/system/network", methods=["POST"])
+    def api_set_network():
+        """Apply a network config change.
+
+        Body:
+            {"mode": "static", "interface": "wlan0",
+             "address": "192.168.0.66/24", "gateway": "192.168.0.1",
+             "dns": "8.8.8.8,1.1.1.1"}
+            {"mode": "dhcp", "interface": "wlan0"}
+
+        WARNING: applying a wrong static config will cut the operator off
+        the Pi until they fix it from the local console.
+        """
+        if not requires_root():
+            return jsonify({
+                "error": "Permission denied. Service must run as root.",
+                "code": "PERMISSION_DENIED",
+            }), 403
+
+        data = request.get_json(silent=True) or {}
+        mode = str(data.get("mode", "")).strip().lower()
+        interface = str(data.get("interface", "")).strip()
+        if not interface:
+            return jsonify({"error": "interface is required",
+                            "code": "INVALID_REQUEST"}), 400
+
+        try:
+            if mode == "static":
+                address = str(data.get("address", "")).strip()
+                gateway = str(data.get("gateway", "")).strip()
+                dns = data.get("dns", "")
+                output = set_static_ip(interface, address, gateway, dns)
+                return jsonify({
+                    "success": True,
+                    "mode": "static",
+                    "interface": interface,
+                    "address": address,
+                    "gateway": gateway,
+                    "message": output,
+                })
+            elif mode == "dhcp":
+                output = set_dhcp(interface)
+                return jsonify({
+                    "success": True,
+                    "mode": "dhcp",
+                    "interface": interface,
+                    "message": output,
+                })
+            else:
+                return jsonify({
+                    "error": "mode must be 'static' or 'dhcp'",
+                    "code": "INVALID_REQUEST",
+                }), 400
+        except NetworkConfigError as exc:
+            logger.error("Network change failed: %s", exc)
+            return jsonify({"error": str(exc), "code": "NETWORK_ERROR"}), 400
 
     @app.route("/api/system/hostname/validate", methods=["POST"])
     def api_validate_hostname():

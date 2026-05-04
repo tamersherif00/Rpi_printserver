@@ -31,6 +31,77 @@
             </div>
         </div>
 
+        <!-- Network (static IP) -->
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-ethernet"></i> Network (IPv4)</h5>
+                <span id="net-mode-badge" class="badge bg-secondary">loading…</span>
+            </div>
+            <div class="card-body">
+                <div class="alert alert-warning small" role="alert">
+                    <i class="bi bi-exclamation-triangle-fill"></i>
+                    Changing the network configuration will <strong>briefly drop the
+                    connection</strong>. If the new IP or gateway is wrong you will
+                    lose access to the Pi and must fix it from the local console.
+                    Recommended: assign the same IP your router currently leases
+                    (shown below) to make the lease permanent.
+                </div>
+
+                <dl class="row mb-3 small">
+                    <dt class="col-sm-3">Backend</dt>
+                    <dd class="col-sm-9"><code id="net-backend">…</code></dd>
+                    <dt class="col-sm-3">Interface</dt>
+                    <dd class="col-sm-9"><code id="net-iface">…</code></dd>
+                    <dt class="col-sm-3">Current address</dt>
+                    <dd class="col-sm-9"><code id="net-addr">…</code></dd>
+                    <dt class="col-sm-3">Gateway</dt>
+                    <dd class="col-sm-9"><code id="net-gw">…</code></dd>
+                    <dt class="col-sm-3">DNS</dt>
+                    <dd class="col-sm-9"><code id="net-dns">…</code></dd>
+                </dl>
+
+                <form id="net-form" class="row g-2" autocomplete="off">
+                    <div class="col-md-6">
+                        <label for="net-form-addr" class="form-label small mb-1">
+                            Static IP / prefix
+                        </label>
+                        <input type="text" class="form-control form-control-sm"
+                               id="net-form-addr" placeholder="192.168.0.66/24"
+                               pattern="^([0-9]{1,3}\.){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$"
+                               required>
+                    </div>
+                    <div class="col-md-6">
+                        <label for="net-form-gw" class="form-label small mb-1">
+                            Gateway
+                        </label>
+                        <input type="text" class="form-control form-control-sm"
+                               id="net-form-gw" placeholder="192.168.0.1"
+                               pattern="^([0-9]{1,3}\.){3}[0-9]{1,3}$" required>
+                    </div>
+                    <div class="col-12">
+                        <label for="net-form-dns" class="form-label small mb-1">
+                            DNS servers (comma separated, optional)
+                        </label>
+                        <input type="text" class="form-control form-control-sm"
+                               id="net-form-dns" placeholder="8.8.8.8,1.1.1.1">
+                    </div>
+                    <div class="col-12 d-flex gap-2 mt-2">
+                        <button type="submit" class="btn btn-primary btn-sm">
+                            <i class="bi bi-save"></i> Apply static IP
+                        </button>
+                        <button type="button" id="net-dhcp-btn" class="btn btn-outline-secondary btn-sm">
+                            <i class="bi bi-arrow-counterclockwise"></i> Revert to DHCP
+                        </button>
+                        <button type="button" id="net-refresh-btn" class="btn btn-link btn-sm ms-auto">
+                            <i class="bi bi-arrow-clockwise"></i> Refresh
+                        </button>
+                    </div>
+                </form>
+
+                <div id="net-result" class="small mt-3"></div>
+            </div>
+        </div>
+
         <!-- About Section -->
         <div class="card">
             <div class="card-header">
@@ -100,4 +171,119 @@
 <div class="position-fixed bottom-0 end-0 p-3" style="z-index: 11">
     <div id="toast-container"></div>
 </div>
+
+<script>
+// ── Network (static IP) settings ────────────────────────────────────────────
+(function () {
+    const $ = (id) => document.getElementById(id);
+
+    function setBadge(mode, backend) {
+        const el = $('net-mode-badge');
+        if (!el) return;
+        if (mode === 'static') {
+            el.className = 'badge bg-primary';
+            el.textContent = 'static (' + (backend || '?') + ')';
+        } else if (mode === 'dhcp') {
+            el.className = 'badge bg-success';
+            el.textContent = 'DHCP (' + (backend || '?') + ')';
+        } else {
+            el.className = 'badge bg-secondary';
+            el.textContent = mode || 'unknown';
+        }
+    }
+
+    async function loadNetwork() {
+        $('net-result').innerHTML = '';
+        try {
+            const r = await fetch('/api/system/network');
+            const j = await r.json();
+            if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+            $('net-backend').textContent = j.backend || '—';
+            $('net-iface').textContent   = j.interface || '—';
+            $('net-addr').textContent    = j.address || '—';
+            $('net-gw').textContent      = j.gateway || '—';
+            $('net-dns').textContent     = j.dns || '—';
+            setBadge(j.mode, j.backend);
+            // Pre-fill the form with current values so the operator can
+            // make the current DHCP lease permanent in one click.
+            if (j.address) $('net-form-addr').value = j.address;
+            if (j.gateway) $('net-form-gw').value   = j.gateway;
+            if (j.dns)     $('net-form-dns').value  = j.dns;
+            window._netIface = j.interface;
+        } catch (e) {
+            $('net-result').innerHTML =
+                '<div class="alert alert-danger py-2 mb-0">Could not load network config: '
+                + e.message + '</div>';
+        }
+    }
+
+    function showResult(html, kind) {
+        $('net-result').innerHTML =
+            '<div class="alert alert-' + kind + ' py-2 mb-0">' + html + '</div>';
+    }
+
+    async function applyConfig(payload, confirmMsg) {
+        if (!window.confirm(confirmMsg)) return;
+        showResult('<i class="bi bi-hourglass-split"></i> Applying… the page may '
+                 + 'briefly stall if your IP changes.', 'warning');
+        try {
+            const r = await fetch('/api/system/network', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(payload),
+            });
+            const j = await r.json();
+            if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+
+            // If the IP changed, the current page URL is now stale.
+            // Tell the user where to reload.
+            const newIp = (payload.address || '').split('/')[0];
+            const sameHost = !newIp || location.hostname === newIp
+                          || location.hostname.endsWith('.local');
+            const port = location.port || '80';
+            const newUrl = newIp ? (location.protocol + '//' + newIp + ':' + port + '/settings')
+                                 : null;
+
+            let msg = '<i class="bi bi-check-circle-fill"></i> ' + (j.message || 'Applied.');
+            if (newUrl && !sameHost === false && payload.mode === 'static') {
+                msg += '<br>If your browser loses the connection, reload at '
+                     + '<a href="' + newUrl + '">' + newUrl + '</a>.';
+            }
+            showResult(msg, 'success');
+            // Refresh after a short delay so nmcli has time to settle.
+            setTimeout(loadNetwork, 4000);
+        } catch (e) {
+            showResult('<i class="bi bi-x-circle-fill"></i> ' + e.message, 'danger');
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        loadNetwork();
+
+        $('net-refresh-btn').addEventListener('click', loadNetwork);
+
+        $('net-form').addEventListener('submit', (ev) => {
+            ev.preventDefault();
+            const iface = window._netIface || 'wlan0';
+            const address = $('net-form-addr').value.trim();
+            const gateway = $('net-form-gw').value.trim();
+            const dns     = $('net-form-dns').value.trim();
+            applyConfig(
+                {mode: 'static', interface: iface, address, gateway, dns},
+                'Set ' + iface + ' to static IP ' + address + ' (gateway '
+                + gateway + ')?\n\nIf the values are wrong you will lose web '
+                + 'and SSH access until you fix it from the local console.',
+            );
+        });
+
+        $('net-dhcp-btn').addEventListener('click', () => {
+            const iface = window._netIface || 'wlan0';
+            applyConfig(
+                {mode: 'dhcp', interface: iface},
+                'Revert ' + iface + ' to DHCP?',
+            );
+        });
+    });
+})();
+</script>
 {% endblock %}
