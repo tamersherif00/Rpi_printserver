@@ -1,0 +1,11 @@
+[Unit]
+Description=Run print-server health snapshot every 5 minutes
+
+[Timer]
+OnBootSec=120
+OnUnitActiveSec=300
+AccuracySec=30
+Persistent=false
+
+[Install]
+WantedBy=timers.target

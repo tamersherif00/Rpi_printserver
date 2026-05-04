@@ -1,0 +1,11 @@
+[Unit]
+Description=Print server health snapshot (memory, sockets, OOM)
+Documentation=man:health-monitor.sh
+
+[Service]
+Type=oneshot
+ExecStart=/opt/printserver/scripts/health-monitor.sh
+TimeoutStartSec=15
+# Tiny memory footprint — never compete with the services we monitor.
+MemoryMax=32M
+Nice=10

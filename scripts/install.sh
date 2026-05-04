@@ -338,11 +338,32 @@ install_systemd_service() {
     cp "$SCRIPT_DIR/printer-watchdog.sh" "$INSTALL_DIR/scripts/"
     chmod +x "$INSTALL_DIR/scripts/printer-watchdog.sh"
 
+    # Install health monitor — periodic snapshot of memory, sockets, OOM,
+    # service state. Writes to /var/log/printserver/health.log so that
+    # AFTER an outage and reboot the operator can see what was wrong
+    # without needing live SSH access at the moment of failure.
+    cp "$PROJECT_DIR/config/systemd/health-monitor.service" /etc/systemd/system/
+    cp "$PROJECT_DIR/config/systemd/health-monitor.timer" /etc/systemd/system/
+    cp "$SCRIPT_DIR/health-monitor.sh" "$INSTALL_DIR/scripts/"
+    chmod +x "$INSTALL_DIR/scripts/health-monitor.sh"
+
+    # Install ssh.service drop-in to protect sshd from the kernel OOM killer.
+    # On a 1 GB Pi 3B, memory pressure can cause OOM to kill sshd, leaving
+    # the operator with only ICMP. With OOMScoreAdjust=-900, the kernel
+    # kills printserver-web (OOMScoreAdjust=200) first instead.
+    if [[ -f "$PROJECT_DIR/config/systemd/ssh-oom-protect.conf" ]]; then
+        mkdir -p /etc/systemd/system/ssh.service.d
+        cp "$PROJECT_DIR/config/systemd/ssh-oom-protect.conf" \
+           /etc/systemd/system/ssh.service.d/oom-protect.conf
+        log_info "Installed ssh.service OOM-protection drop-in"
+    fi
+
     systemctl daemon-reload
     systemctl enable printserver-web.service
     systemctl enable cups.service
     systemctl enable avahi-daemon.service
     systemctl enable --now printer-watchdog.timer
+    systemctl enable --now health-monitor.timer
     systemctl enable smbd.service nmbd.service 2>/dev/null || true
     systemctl enable wsdd.service 2>/dev/null || true
 
@@ -394,6 +415,36 @@ EOF
     missingok
     notifempty
     copytruncate
+}
+EOF
+
+    # health.log: a tiny snapshot per 5 min (~2 KB), but over a year that's
+    # ~210 MB unrotated. Keep 14 days compressed (under 1 MB total).
+    cat > /etc/logrotate.d/printserver-health << 'EOF'
+/var/log/printserver/health.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}
+EOF
+
+    # printer-hotplug.log: written to by udev RUN+= on every USB add/remove.
+    # Previously unrotated — could grow unbounded on a flaky USB cable and
+    # eventually fill the SD card.
+    cat > /etc/logrotate.d/printer-hotplug << 'EOF'
+/var/log/printer-hotplug.log {
+    weekly
+    rotate 4
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    maxsize 10M
 }
 EOF
 

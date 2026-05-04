@@ -15,6 +15,10 @@ WorkingDirectory=/opt/printserver
 Environment=FLASK_ENV=production
 Environment=PYTHONPATH=/opt/printserver
 Environment=PRINTSERVER_CONFIG=/etc/printserver/config.ini
+# HOME must point at a writable dir or gunicorn's control server tries to
+# create /root/.gunicorn — blocked by ProtectHome=read-only — and logs
+# "[Errno 30] Read-only file system: '/root/.gunicorn'" on every start.
+Environment=HOME=/var/lib/printserver
 
 # Wait for CUPS to be ready before starting (fast exponential poll: 0.5, 1, 2, 2, 2... up to ~10s)
 ExecStartPre=/bin/sh -c 'delay=0.5; for i in 1 2 3 4 5 6; do systemctl is-active cups >/dev/null 2>&1 && exit 0; sleep $delay; delay=$(echo "$delay 2" | awk "{d=\$1*\$2; print (d>2?2:d)}"); done; exit 0'
@@ -26,7 +30,7 @@ ExecStart=/opt/printserver/venv/bin/gunicorn \
     --timeout 15 \
     --graceful-timeout 10 \
     --keep-alive 2 \
-    --max-requests 500 \
+    --max-requests 200 \
     --max-requests-jitter 50 \
     --worker-tmp-dir /dev/shm \
     --access-logfile - \
@@ -59,6 +63,11 @@ MemoryMax=256M
 MemorySwapMax=64M
 CPUQuota=50%
 OOMPolicy=kill
+# Make this service the FIRST candidate for OOM kill (default is 0).
+# Pairs with OOMScoreAdjust=-900 on ssh.service so SSH always survives
+# even when the Pi runs out of memory — operator can always log in to
+# diagnose. systemd will restart us anyway (Restart=always).
+OOMScoreAdjust=200
 
 # Logging
 StandardOutput=journal

@@ -11,10 +11,16 @@
 #   → CUPS queue is preserved so queued jobs survive a cable reconnect.
 #     Avahi is refreshed to remove stale mDNS advertisements.
 
-# Restart CUPS immediately so it can re-enumerate the USB device tree.
+# Restart CUPS so it can re-enumerate the USB device tree.
 # hotplug-printer.sh then waits for the scheduler before doing lpadmin work.
+#
+# IMPORTANT: use systemd-run --no-block instead of `systemctl restart`.
+# udev RUN+= blocks the udev worker until the command exits; a synchronous
+# `systemctl restart` waits for the whole D-Bus transaction and can stall
+# the udev queue under load (cascading USB events, daemon-reload races).
+# --no-block returns immediately and lets systemd schedule the restart.
 SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", ACTION=="add", \
-    RUN+="/bin/systemctl restart cups.service"
+    RUN+="/bin/systemd-run --no-block --unit=cups-restart-on-hotplug systemctl restart cups.service"
 
 # Disable USB autosuspend for printers — prevents sleep-related latency
 SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", ACTION=="add", \

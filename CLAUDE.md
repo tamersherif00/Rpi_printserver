@@ -69,4 +69,20 @@ Verified working on Windows 10/11 against a Raspberry Pi at 192.168.0.65.
 - **IPP (recommended, no password):** `http://192.168.0.65:631/printers/<name>`
 - **SMB browse:** `\\192.168.0.65` → username `printuser`, password `printserver`
 - Change default password: `sudo smbpasswd printuser`
+
+## SSH/Web "stops responding after a few days" — Mitigations (2026-05-04, v1.1.0)
+
+Symptom: Pi stays pingable but SSH (port 22) and web (port 5000) stop
+responding every few days. Local console + reboot fixes it. Root cause is
+kernel OOM under memory pressure on 1 GB Pi 3B (CUPS+Avahi+Samba+wsdd+
+gunicorn+kernel) — the OOM killer takes down sshd and gunicorn workers but
+the kernel network stack stays up, so ICMP keeps replying.
+
+| Layer | Change |
+|---|---|
+| sshd | `OOMScoreAdjust=-900` drop-in (`/etc/systemd/system/ssh.service.d/oom-protect.conf`) — kernel kills sshd LAST |
+| printserver-web | `OOMScoreAdjust=200` (first to die, auto-restarts), `HOME=/var/lib/printserver` silences `[Errno 30] /root/.gunicorn`, `--max-requests 200` recycles workers sooner |
+| udev | `systemd-run --no-block` instead of synchronous `systemctl restart cups.service` so udev workers can't deadlock on USB events |
+| logs | logrotate for `/var/log/printer-hotplug.log` (was unbounded) and `/var/log/printserver/health.log` |
+| diagnostics | `health-monitor.timer` — every 5 min appends free / listening sockets / top-RSS / OOM count / temp / disk to `/var/log/printserver/health.log`. After the next outage, look at the snapshot just before the reboot timestamp to see what was wrong. |
 <!-- MANUAL ADDITIONS END -->
